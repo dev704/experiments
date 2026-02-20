@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SA Election Results Map — NPE 2024</title>
+
+  <!-- MapLibre GL (open-source Mapbox fork, no API key needed) -->
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #e94560;
+    }
+
+    header p {
+      font-size: 0.8rem;
+      color: #888;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-left: auto;
+      align-items: center;
+    }
+
+    .controls label {
+      font-size: 0.8rem;
+      color: #aaa;
+    }
+
+    .controls select {
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #e94560;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    .main {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    #map {
+      flex: 1;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 320px;
+      background: #16213e;
+      border-left: 1px solid #0f3460;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      background: #0f3460;
+      padding: 12px 16px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #e94560;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .sidebar-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+
+    .placeholder {
+      color: #555;
+      font-size: 0.85rem;
+      text-align: center;
+      margin-top: 40px;
+      line-height: 1.6;
+    }
+
+    .area-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+
+    .area-code {
+      font-size: 0.75rem;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid #0f3460;
+      font-size: 0.82rem;
+    }
+
+    .stat-label { color: #aaa; }
+    .stat-value { color: #fff; font-weight: 500; }
+
+    .parties-header {
+      font-size: 0.75rem;
+      color: #e94560;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 16px 0 8px;
+    }
+
+    .party-row {
+      display: flex;
+      align-items: center;
+      padding: 5px 0;
+      gap: 10px;
+      font-size: 0.82rem;
+    }
+
+    .party-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .party-name { flex: 1; color: #ccc; }
+    .party-votes { color: #aaa; font-size: 0.75rem; width: 80px; text-align: right; }
+    .party-perc { color: #fff; font-weight: 600; width: 45px; text-align: right; }
+
+    .bar-outer {
+      height: 4px;
+      background: #0f3460;
+      border-radius: 2px;
+      margin: 2px 0 4px;
+    }
+
+    .bar-inner {
+      height: 100%;
+      border-radius: 2px;
+    }
+
+    /* Legend */
+    .legend {
+      position: absolute;
+      bottom: 30px;
+      left: 16px;
+      background: rgba(22, 33, 62, 0.92);
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.78rem;
+      z-index: 10;
+      backdrop-filter: blur(4px);
+    }
+
+    .legend-title {
+      font-weight: 700;
+      color: #e94560;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      font-size: 0.72rem;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 5px;
+    }
+
+    .legend-swatch {
+      width: 16px;
+      height: 12px;
+      border-radius: 2px;
+    }
+
+    .legend-label { color: #ccc; }
+
+    /* Hover popup */
+    .map-tooltip {
+      background: rgba(22, 33, 62, 0.95);
+      border: 1px solid #e94560;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 0.82rem;
+      color: #e0e0e0;
+      pointer-events: none;
+    }
+
+    .loading {
+      color: #aaa;
+      text-align: center;
+      padding: 20px;
+      font-size: 0.85rem;
+    }
+
+    .error {
+      color: #e94560;
+      text-align: center;
+      padding: 20px;
+      font-size: 0.82rem;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #16213e; }
+    ::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 3px; }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .sidebar { width: 280px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🗳️ SA Election Results Map</h1>
+    <p>2024 National & Provincial Elections — by Municipality</p>
+  </div>
+  <div class="controls">
+    <label for="ballotSelect">Ballot:</label>
+    <select id="ballotSelect">
+      <option value="nat">National</option>
+      <option value="prov">Provincial</option>
+    </select>
+    <label for="themeSelect">Theme:</label>
+    <select id="themeSelect">
+      <option value="leading">Leading Party</option>
+      <option value="turnout">Voter Turnout</option>
+    </select>
+  </div>
+</header>
+
+<div class="main">
+  <div id="map"></div>
+
+  <div class="sidebar">
+    <div class="sidebar-header">Municipality Results</div>
+    <div class="sidebar-content" id="sidebarContent">
+      <div class="placeholder">
+        🖱️ Click any municipality on the map to see detailed results
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Legend -->
+<div class="legend" id="legend">
+  <div class="legend-title">Leading Party</div>
+  <div id="legendItems"></div>
+</div>
+
+<script>
+// ──────────────────────────────────────────
+// Party colour palette (from Adrian's source)
+// ──────────────────────────────────────────
+const PARTIES = {
+  'ANC':    { name: 'African National Congress',   color: '#23913e', displayColor: '#23913e' },
+  'DA':     { name: 'Democratic Alliance',          color: '#2171b5', displayColor: '#2171b5' },
+  'EFF':    { name: 'Economic Freedom Fighters',    color: '#6a51a3', displayColor: '#6a51a3' },
+  'IFP':    { name: 'Inkatha Freedom Party',        color: '#cb181d', displayColor: '#cb181d' },
+  'M.K.':  { name: 'uMkhonto we Sizwe (MKP)',       color: '#d94801', displayColor: '#d94801' },
+  'VF PLUS':{ name: 'VryheidsFont Plus',            color: '#f03b20', displayColor: '#f03b20' },
+  'PA':     { name: 'Patriotic Alliance',           color: '#0570b0', displayColor: '#0570b0' },
+  'RISE':   { name: 'Rise Mzansi',                  color: '#6baed6', displayColor: '#6baed6' },
+  'Other':  { name: 'Other',                        color: '#737373', displayColor: '#737373' }
+};
+
+// Full party name → abbreviation lookup (for API results)
+const PARTY_ABBR = {
+  'AFRICAN NATIONAL CONGRESS': 'ANC',
+  'DEMOCRATIC ALLIANCE': 'DA',
+  'ECONOMIC FREEDOM FIGHTERS': 'EFF',
+  'INKATHA FREEDOM PARTY': 'IFP',
+  'UMKHONTO WESIZWE': 'M.K.',
+  'VRYHEIDSFRONT PLUS': 'VF PLUS',
+  'PATRIOTIC ALLIANCE': 'PA',
+  'RISE MZANSI': 'RISE',
+  'ACTIONSA': 'ActionSA',
+  'AFRICAN CHRISTIAN DEMOCRATIC PARTY': 'ACDP',
+  'AL JAMA-AH': 'Al Jama-ah',
+  'GOOD': 'GOOD',
+  'CONGRESS OF THE PEOPLE': 'COPE',
+  'PAN AFRICANIST CONGRESS OF AZANIA': 'PAC',
+  'UNITED DEMOCRATIC MOVEMENT': 'UDM',
+  'BUILD ONE SOUTH AFRICA WITH MMUSI MAIMANE': 'BOSA',
+};
+
+// ──────────────────────────────────────────
+// MapLibre GL style expression builders
+// ──────────────────────────────────────────
+function buildLeadingPartyColor(ballot) {
+  // step by win % within each party's colour range
+  const gradients = {
+    'ANC':   ['rgb(199,233,192)', 'rgb(116,196,118)', 'rgb(35,139,69)', 'rgb(0,90,50)'],
+    'DA':    ['rgb(198,219,239)', 'rgb(107,174,214)', 'rgb(33,113,181)', 'rgb(8,69,148)'],
+    'EFF':   ['rgb(218,218,235)', 'rgb(158,154,200)', 'rgb(106,81,163)', 'rgb(74,20,134)'],
+    'IFP':   ['rgb(252,187,161)', 'rgb(251,106,74)',  'rgb(203,24,29)',  'rgb(153,0,13)'],
+    'M.K.': ['rgb(253,208,162)', 'rgb(253,141,60)',  'rgb(217,72,1)',   'rgb(140,45,4)'],
+  };
+
+  const makeStep = (colors) => [
+    'step', ['get', `${ballot}_win_perc`],
+    colors[0], 50, colors[1], 65, colors[2], 80, colors[3]
+  ];
+
+  const expr = ['match', ['get', `${ballot}_win_party`]];
+  for (const [abbr, colors] of Object.entries(gradients)) {
+    expr.push(abbr, makeStep(colors));
+  }
+  // fallback (Other)
+  expr.push(['step', ['get', `${ballot}_win_perc`],
+    'rgb(217,217,217)', 50, 'rgb(150,150,150)', 65, 'rgb(82,82,82)', 80, 'rgb(37,37,37)'
+  ]);
+  return expr;
+}
+
+function buildTurnoutColor(ballot) {
+  return [
+    'interpolate', ['linear'],
+    ['get', `${ballot}_turnout`],
+    0,   'rgb(254,235,226)',
+    30,  'rgb(252,174,145)',
+    50,  'rgb(251,106,74)',
+    65,  'rgb(222,45,38)',
+    80,  'rgb(165,15,21)'
+  ];
+}
+
+// ──────────────────────────────────────────
+// Map setup
+// ──────────────────────────────────────────
+const API = 'https://elections-api.frith.dev';
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  center: [25.5, -28.5],
+  zoom: 5,
+  minZoom: 4,
+  maxZoom: 18
+});
+
+map.addControl(new maplibregl.NavigationControl(), 'top-left');
+map.addControl(new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' }), 'bottom-left');
+
+let currentBallot = 'nat';
+let currentTheme  = 'leading';
+let hoveredId     = null;
+
+// Tooltip element
+const tooltip = document.createElement('div');
+tooltip.className = 'map-tooltip';
+tooltip.style.display = 'none';
+tooltip.style.position = 'absolute';
+tooltip.style.zIndex = '20';
+document.getElementById('map').appendChild(tooltip);
+
+map.on('load', () => {
+  addElectionLayers();
+  updateLegend();
+});
+
+function addElectionLayers() {
+  // Remove existing layers/source if re-adding
+  ['muni-fill', 'muni-line', 'muni-hover'].forEach(id => {
+    if (map.getLayer(id)) map.removeLayer(id);
+  });
+  if (map.getSource('muni')) map.removeSource('muni');
+
+  // Vector tile source from Adrian's public API
+  map.addSource('muni', {
+    type: 'vector',
+    tiles: [`${API}/tiles/muni_npe2024/{z}/{x}/{y}/tile.mvt`],
+    minzoom: 4,
+    maxzoom: 18
+  });
+
+  // Fill layer
+  map.addLayer({
+    id: 'muni-fill',
+    type: 'fill',
+    source: 'muni',
+    'source-layer': 'muni_npe2024',
+    paint: {
+      'fill-color': getFillColor(),
+      'fill-opacity': [
+        'case',
+        ['boolean', ['feature-state', 'hover'], false], 0.85,
+        0.65
+      ]
+    }
+  });
+
+  // Outline layer
+  map.addLayer({
+    id: 'muni-line',
+    type: 'line',
+    source: 'muni',
+    'source-layer': 'muni_npe2024',
+    paint: {
+      'line-color': 'rgba(255,255,255,0.3)',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.3, 9, 1.5]
+    }
+  });
+
+  // Hover highlight layer
+  map.addLayer({
+    id: 'muni-hover',
+    type: 'line',
+    source: 'muni',
+    'source-layer': 'muni_npe2024',
+    paint: {
+      'line-color': '#e94560',
+      'line-width': 2.5
+    },
+    filter: ['==', ['get', 'code'], '']
+  });
+
+  // Mouse events
+  map.on('mousemove', 'muni-fill', onMouseMove);
+  map.on('mouseleave', 'muni-fill', onMouseLeave);
+  map.on('click', 'muni-fill', onClick);
+  map.getCanvas().style.cursor = 'pointer';
+}
+
+function getFillColor() {
+  if (currentTheme === 'leading') return buildLeadingPartyColor(currentBallot);
+  return buildTurnoutColor(currentBallot);
+}
+
+function updateFillColor() {
+  if (!map.getLayer('muni-fill')) return;
+  map.setPaintProperty('muni-fill', 'fill-color', getFillColor());
+}
+
+// ──────────────────────────────────────────
+// Hover interaction
+// ──────────────────────────────────────────
+function onMouseMove(e) {
+  if (e.features.length === 0) return;
+  const feat = e.features[0];
+  const props = feat.properties;
+
+  // Update hover filter
+  map.setFilter('muni-hover', ['==', ['get', 'code'], props.code]);
+
+  // Tooltip
+  const winParty = props[`${currentBallot}_win_party`] || 'N/A';
+  const winPerc  = props[`${currentBallot}_win_perc`];
+  const turnout  = props[`${currentBallot}_turnout`];
+
+  tooltip.innerHTML = `
+    <strong>${props.name || props.code}</strong><br/>
+    Leading: <strong>${winParty}</strong> (${winPerc ? winPerc.toFixed(1) + '%' : '—'})<br/>
+    Turnout: ${turnout ? turnout.toFixed(1) + '%' : '—'}
+  `;
+  tooltip.style.display = 'block';
+  tooltip.style.left = (e.originalEvent.offsetX + 16) + 'px';
+  tooltip.style.top  = (e.originalEvent.offsetY - 10) + 'px';
+}
+
+function onMouseLeave() {
+  map.setFilter('muni-hover', ['==', ['get', 'code'], '']);
+  tooltip.style.display = 'none';
+}
+
+// ──────────────────────────────────────────
+// Click → sidebar
+// ──────────────────────────────────────────
+function onClick(e) {
+  if (e.features.length === 0) return;
+  const code = e.features[0].properties.code;
+  loadAreaDetail(code);
+}
+
+async function loadAreaDetail(code) {
+  const sidebar = document.getElementById('sidebarContent');
+  sidebar.innerHTML = '<div class="loading">Loading…</div>';
+
+  try {
+    const res  = await fetch(`${API}/npe2024/${currentBallot}/muni/${code}`);
+    const data = await res.json();
+    renderSidebar(data);
+  } catch (err) {
+    sidebar.innerHTML = `<div class="error">Failed to load data for ${code}</div>`;
+  }
+}
+
+function renderSidebar(data) {
+  const sidebar = document.getElementById('sidebarContent');
+  const totalValid = data.valid || 0;
+
+  // Sort parties by votes descending, show top 10
+  const parties = (data.parties || [])
+    .sort((a, b) => b.votes - a.votes)
+    .slice(0, 10);
+
+  const fmt = n => Number(n).toLocaleString('en-GB');
+  const pct = (n, d) => d > 0 ? (n / d * 100).toFixed(1) + '%' : '—';
+
+  // Leading party
+  const leader = parties[0];
+  const leaderAbbr = leader ? (PARTY_ABBR[leader.name] || leader.abbrev || leader.name) : '—';
+  const leaderColor = (PARTIES[leaderAbbr] || PARTIES['Other']).color;
+
+  sidebar.innerHTML = `
+    <div class="area-name">${data.name}</div>
+    <div class="area-code">Code: ${data.code}</div>
+
+    <div class="stat-row">
+      <span class="stat-label">Registered Voters</span>
+      <span class="stat-value">${fmt(data.regpop)}</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Valid Votes</span>
+      <span class="stat-value">${fmt(data.valid)} (${pct(data.valid, data.total)})</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Spoilt Ballots</span>
+      <span class="stat-value">${fmt(data.spoilt)}</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Turnout</span>
+      <span class="stat-value">${pct(data.total, data.regpop)}</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Leading Party</span>
+      <span class="stat-value" style="color:${leaderColor}">${leaderAbbr}</span>
+    </div>
+
+    <div class="parties-header">Party Results</div>
+    ${parties.map(party => {
+      const abbr  = PARTY_ABBR[party.name] || party.abbrev || party.name.substring(0, 8);
+      const color = (PARTIES[abbr] || PARTIES['Other']).color;
+      const pctVal = totalValid > 0 ? (party.votes / totalValid * 100) : 0;
+      return `
+        <div class="party-row">
+          <div class="party-swatch" style="background:${color}"></div>
+          <div class="party-name" title="${party.name}">${abbr}</div>
+          <div class="party-votes">${fmt(party.votes)}</div>
+          <div class="party-perc">${pctVal.toFixed(1)}%</div>
+        </div>
+        <div class="bar-outer">
+          <div class="bar-inner" style="width:${Math.min(pctVal,100)}%;background:${color}"></div>
+        </div>
+      `;
+    }).join('')}
+  `;
+}
+
+// ──────────────────────────────────────────
+// Legend
+// ──────────────────────────────────────────
+function updateLegend() {
+  const el = document.getElementById('legendItems');
+  const title = document.querySelector('.legend-title');
+
+  if (currentTheme === 'leading') {
+    title.textContent = 'Leading Party';
+    const items = [
+      { label: 'ANC — African National Congress', color: '#23913e' },
+      { label: 'DA — Democratic Alliance',         color: '#2171b5' },
+      { label: 'EFF — Economic Freedom Fighters',  color: '#6a51a3' },
+      { label: 'MKP — uMkhonto we Sizwe',          color: '#d94801' },
+      { label: 'IFP — Inkatha Freedom Party',      color: '#cb181d' },
+      { label: 'Other',                            color: '#737373' },
+    ];
+    el.innerHTML = items.map(i => `
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:${i.color}"></div>
+        <span class="legend-label">${i.label}</span>
+      </div>
+    `).join('');
+  } else {
+    title.textContent = 'Voter Turnout';
+    const items = [
+      { label: '< 30%', color: 'rgb(254,235,226)' },
+      { label: '30–50%', color: 'rgb(252,174,145)' },
+      { label: '50–65%', color: 'rgb(251,106,74)' },
+      { label: '65–80%', color: 'rgb(222,45,38)' },
+      { label: '> 80%', color: 'rgb(165,15,21)' },
+    ];
+    el.innerHTML = items.map(i => `
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:${i.color}"></div>
+        <span class="legend-label">${i.label}</span>
+      </div>
+    `).join('');
+  }
+}
+
+// ──────────────────────────────────────────
+// Controls
+// ──────────────────────────────────────────
+document.getElementById('ballotSelect').addEventListener('change', e => {
+  currentBallot = e.target.value;
+  updateFillColor();
+  document.getElementById('sidebarContent').innerHTML =
+    '<div class="placeholder">🖱️ Click any municipality to see results</div>';
+});
+
+document.getElementById('themeSelect').addEventListener('change', e => {
+  currentTheme = e.target.value;
+  updateFillColor();
+  updateLegend();
+});
+</script>
+</body>
+</html>
