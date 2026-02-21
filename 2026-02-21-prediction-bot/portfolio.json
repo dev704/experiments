@@ -1,0 +1,20 @@
+{
+  "capital": 9600.0,
+  "positions": [
+    {
+      "market_id": "demo-2",
+      "market_title": "Biden re-elected 2028?",
+      "side": "YES",
+      "entry_prob": 0.42,
+      "size": 400.00000000000006,
+      "entry_time": 1771639309,
+      "status": "open",
+      "exit_prob": null,
+      "exit_time": null,
+      "pnl": null
+    }
+  ],
+  "closed_positions": [],
+  "total_pnl": 0.0,
+  "created_at": 1771639309
+}
