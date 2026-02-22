@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Life Symphony 🎵</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a1a; color: #e0e0e0; font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+h1 { margin: 16px 0 4px; font-size: 1.6em; background: linear-gradient(90deg, #ff6ec7, #7b68ee, #00ced1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.subtitle { font-size: 0.85em; color: #888; margin-bottom: 12px; }
+.controls { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; justify-content: center; align-items: center; }
+button { background: #1a1a3a; color: #aaa; border: 1px solid #333; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 0.85em; transition: all 0.2s; }
+button:hover { background: #2a2a5a; color: #fff; border-color: #666; }
+button.active { background: #3a1a5a; color: #ff6ec7; border-color: #ff6ec7; }
+select, input[type=range] { background: #1a1a3a; color: #ccc; border: 1px solid #333; padding: 4px 8px; border-radius: 4px; font-family: inherit; }
+label { font-size: 0.8em; color: #888; }
+canvas { border: 1px solid #222; border-radius: 8px; cursor: crosshair; image-rendering: pixelated; }
+.info { font-size: 0.75em; color: #555; margin-top: 10px; max-width: 600px; text-align: center; line-height: 1.5; }
+.stats { font-size: 0.8em; color: #7b68ee; margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>Life Symphony 🎵🧬</h1>
+<p class="subtitle">Conway's Game of Life × Generative Music</p>
+<div class="controls">
+  <button id="btnPlay">▶ Play</button>
+  <button id="btnStep">⏭ Step</button>
+  <button id="btnClear">🗑 Clear</button>
+  <button id="btnRandom">🎲 Random</button>
+  <button id="btnGlider">🛩 Glider Gun</button>
+  <div>
+    <label>Scale:</label>
+    <select id="selScale">
+      <option value="pentatonic" selected>Pentatonic</option>
+      <option value="major">Major</option>
+      <option value="minor">Minor</option>
+      <option value="chromatic">Chromatic</option>
+      <option value="blues">Blues</option>
+      <option value="japanese">Japanese</option>
+    </select>
+  </div>
+  <div>
+    <label>Speed:</label>
+    <input type="range" id="rngSpeed" min="1" max="20" value="6">
+  </div>
+  <div>
+    <label>Volume:</label>
+    <input type="range" id="rngVol" min="0" max="100" value="40">
+  </div>
+</div>
+<div class="stats" id="stats">Gen 0 · 0 cells alive · Click to draw</div>
+<canvas id="grid"></canvas>
+<p class="info">Click/drag to draw cells. X-axis → pitch, Y-axis → stereo pan. Each living cell sings a note from the selected scale. Births shimmer, deaths fade. The grid plays itself.</p>
+
+<script>
+const COLS = 64, ROWS = 48, CELL = 10;
+const canvas = document.getElementById('grid');
+const ctx = canvas.getContext('2d');
+canvas.width = COLS * CELL;
+canvas.height = ROWS * CELL;
+
+let grid = Array.from({length: ROWS}, () => new Uint8Array(COLS));
+let gen = 0, running = false, animId = null, lastStep = 0;
+let audioCtx = null, masterGain = null;
+
+const SCALES = {
+  pentatonic: [0,2,4,7,9],
+  major: [0,2,4,5,7,9,11],
+  minor: [0,2,3,5,7,8,10],
+  chromatic: [0,1,2,3,4,5,6,7,8,9,10,11],
+  blues: [0,3,5,6,7,10],
+  japanese: [0,1,5,7,8],
+};
+
+const COLORS = {
+  bg: '#0a0a1a',
+  gridLine: '#151530',
+  alive: (x, y) => {
+    const h = (x / COLS) * 280 + 200;
+    const s = 70 + (y / ROWS) * 30;
+    return `hsl(${h % 360}, ${s}%, 65%)`;
+  },
+  born: '#ffffff',
+  dying: '#442244',
+};
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.4;
+  masterGain.connect(audioCtx.destination);
+}
+
+function noteFreq(col) {
+  const scale = SCALES[document.getElementById('selScale').value];
+  const octaveRange = 3;
+  const baseNote = 48; // C3 MIDI
+  const idx = Math.floor((col / COLS) * scale.length * octaveRange);
+  const octave = Math.floor(idx / scale.length);
+  const degree = idx % scale.length;
+  const midi = baseNote + octave * 12 + scale[degree];
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+function playCell(col, row, born) {
+  if (!audioCtx || audioCtx.state === 'suspended') return;
+  const vol = document.getElementById('rngVol').value / 100;
+  if (vol === 0) return;
+
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const pan = audioCtx.createStereoPanner();
+
+  osc.type = born ? 'sine' : 'triangle';
+  osc.frequency.value = noteFreq(col);
+
+  pan.pan.value = ((row / ROWS) * 2 - 1) * 0.8;
+
+  const cellVol = vol * 0.015 * (born ? 1.2 : 0.4);
+  gain.gain.setValueAtTime(cellVol, now);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + (born ? 0.3 : 0.15));
+
+  osc.connect(gain).connect(pan).connect(masterGain);
+  osc.start(now);
+  osc.stop(now + 0.35);
+}
+
+function countNeighbors(r, c) {
+  let n = 0;
+  for (let dr = -1; dr <= 1; dr++)
+    for (let dc = -1; dc <= 1; dc++) {
+      if (!dr && !dc) continue;
+      const nr = (r + dr + ROWS) % ROWS, nc = (c + dc + COLS) % COLS;
+      n += grid[nr][nc];
+    }
+  return n;
+}
+
+function step() {
+  const next = Array.from({length: ROWS}, () => new Uint8Array(COLS));
+  const births = [], deaths = [];
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++) {
+      const n = countNeighbors(r, c);
+      if (grid[r][c]) {
+        if (n === 2 || n === 3) next[r][c] = 1;
+        else deaths.push([r, c]);
+      } else {
+        if (n === 3) { next[r][c] = 1; births.push([r, c]); }
+      }
+    }
+  grid = next;
+  gen++;
+  // Play sounds for births (and a few deaths for texture)
+  births.forEach(([r, c]) => playCell(c, r, true));
+  deaths.slice(0, 12).forEach(([r, c]) => playCell(c, r, false));
+  draw(births, deaths);
+}
+
+function draw(births = [], deaths = []) {
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Grid lines
+  ctx.strokeStyle = COLORS.gridLine;
+  ctx.lineWidth = 0.5;
+  for (let c = 0; c <= COLS; c++) { ctx.beginPath(); ctx.moveTo(c*CELL, 0); ctx.lineTo(c*CELL, ROWS*CELL); ctx.stroke(); }
+  for (let r = 0; r <= ROWS; r++) { ctx.beginPath(); ctx.moveTo(0, r*CELL); ctx.lineTo(COLS*CELL, r*CELL); ctx.stroke(); }
+
+  // Dying cells glow
+  deaths.forEach(([r, c]) => {
+    ctx.fillStyle = COLORS.dying;
+    ctx.fillRect(c*CELL+1, r*CELL+1, CELL-2, CELL-2);
+  });
+
+  // Living cells
+  let alive = 0;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (grid[r][c]) {
+        alive++;
+        ctx.fillStyle = COLORS.alive(c, r);
+        ctx.fillRect(c*CELL+1, r*CELL+1, CELL-2, CELL-2);
+      }
+
+  // Birth flash
+  births.forEach(([r, c]) => {
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillRect(c*CELL, r*CELL, CELL, CELL);
+  });
+
+  document.getElementById('stats').textContent = `Gen ${gen} · ${alive} cells alive · ${document.getElementById('selScale').value} scale`;
+}
+
+function loop(ts) {
+  if (!running) return;
+  const speed = document.getElementById('rngSpeed').value;
+  const interval = 1000 / speed;
+  if (ts - lastStep >= interval) { step(); lastStep = ts; }
+  animId = requestAnimationFrame(loop);
+}
+
+function togglePlay() {
+  initAudio();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  running = !running;
+  document.getElementById('btnPlay').textContent = running ? '⏸ Pause' : '▶ Play';
+  document.getElementById('btnPlay').classList.toggle('active', running);
+  if (running) { lastStep = performance.now(); animId = requestAnimationFrame(loop); }
+}
+
+function randomize() {
+  gen = 0;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      grid[r][c] = Math.random() < 0.25 ? 1 : 0;
+  draw();
+}
+
+function clear() {
+  gen = 0;
+  grid = Array.from({length: ROWS}, () => new Uint8Array(COLS));
+  draw();
+}
+
+function addGliderGun() {
+  // Gosper Glider Gun at (1, 1)
+  const pattern = [
+    [5,1],[5,2],[6,1],[6,2],
+    [5,11],[6,11],[7,11],[4,12],[8,12],[3,13],[9,13],[3,14],[9,14],
+    [6,15],[4,16],[8,16],[5,17],[6,17],[7,17],[6,18],
+    [3,21],[4,21],[5,21],[3,22],[4,22],[5,22],[2,23],[6,23],
+    [1,25],[2,25],[6,25],[7,25],
+    [3,35],[4,35],[3,36],[4,36],
+  ];
+  pattern.forEach(([r, c]) => { if (r < ROWS && c < COLS) grid[r][c] = 1; });
+  draw();
+}
+
+// Drawing
+let drawing = false;
+function cellAt(e) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width / rect.width, sy = canvas.height / rect.height;
+  return [Math.floor((e.clientY - rect.top) * sy / CELL), Math.floor((e.clientX - rect.left) * sx / CELL)];
+}
+canvas.addEventListener('mousedown', e => { drawing = true; const [r,c] = cellAt(e); if (r>=0&&r<ROWS&&c>=0&&c<COLS) { grid[r][c] ^= 1; draw(); } });
+canvas.addEventListener('mousemove', e => { if (!drawing) return; const [r,c] = cellAt(e); if (r>=0&&r<ROWS&&c>=0&&c<COLS) { grid[r][c] = 1; draw(); } });
+canvas.addEventListener('mouseup', () => drawing = false);
+canvas.addEventListener('mouseleave', () => drawing = false);
+// Touch support
+canvas.addEventListener('touchstart', e => { e.preventDefault(); drawing = true; const t = e.touches[0]; const [r,c] = cellAt(t); if (r>=0&&r<ROWS&&c>=0&&c<COLS) { grid[r][c] ^= 1; draw(); } }, {passive:false});
+canvas.addEventListener('touchmove', e => { e.preventDefault(); if (!drawing) return; const t = e.touches[0]; const [r,c] = cellAt(t); if (r>=0&&r<ROWS&&c>=0&&c<COLS) { grid[r][c] = 1; draw(); } }, {passive:false});
+canvas.addEventListener('touchend', () => drawing = false);
+
+document.getElementById('btnPlay').onclick = togglePlay;
+document.getElementById('btnStep').onclick = () => { initAudio(); if(audioCtx.state==='suspended') audioCtx.resume(); step(); };
+document.getElementById('btnClear').onclick = clear;
+document.getElementById('btnRandom').onclick = randomize;
+document.getElementById('btnGlider').onclick = addGliderGun;
+
+// Keyboard
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+  if (e.code === 'KeyR') randomize();
+  if (e.code === 'KeyC') clear();
+});
+
+// Start with something
+randomize();
+draw();
+</script>
+</body>
+</html>
