@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reaction-Diffusion — Turing Patterns</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a0a; color: #e0e0e0; font-family: system-ui, sans-serif; overflow: hidden; }
+canvas { display: block; cursor: crosshair; }
+#ui {
+  position: fixed; top: 12px; left: 12px; z-index: 10;
+  background: rgba(10,10,10,0.85); border-radius: 10px; padding: 14px 18px;
+  backdrop-filter: blur(8px); min-width: 220px; font-size: 13px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+#ui h1 { font-size: 16px; margin-bottom: 8px; font-weight: 600; }
+#ui .sub { color: #888; font-size: 11px; margin-bottom: 10px; }
+.ctrl { margin: 6px 0; display: flex; align-items: center; gap: 8px; }
+.ctrl label { min-width: 60px; font-size: 12px; color: #aaa; }
+.ctrl input[type=range] { flex: 1; accent-color: #f472b6; }
+.ctrl .val { min-width: 42px; text-align: right; font-size: 11px; color: #ccc; font-variant-numeric: tabular-nums; }
+.presets { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.presets button {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+  color: #ddd; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px;
+  transition: background 0.15s;
+}
+.presets button:hover { background: rgba(244,114,182,0.25); }
+.presets button.active { background: rgba(244,114,182,0.4); border-color: #f472b6; }
+#palette-sel { display: flex; gap: 6px; margin: 6px 0; }
+#palette-sel button {
+  width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer;
+  transition: border-color 0.15s;
+}
+#palette-sel button.active { border-color: #fff; }
+.hint { color: #666; font-size: 10px; margin-top: 8px; line-height: 1.5; }
+#fps { position: fixed; top: 12px; right: 12px; color: #555; font-size: 11px; font-family: monospace; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <h1>🧬 Reaction-Diffusion</h1>
+  <div class="sub">Gray-Scott model · GPU-accelerated</div>
+  <div class="presets" id="presets"></div>
+  <div class="ctrl"><label>Feed (f)</label><input type="range" id="sl-f" min="0" max="0.1" step="0.001"><span class="val" id="v-f"></span></div>
+  <div class="ctrl"><label>Kill (k)</label><input type="range" id="sl-k" min="0.03" max="0.08" step="0.001"><span class="val" id="v-k"></span></div>
+  <div class="ctrl"><label>Speed</label><input type="range" id="sl-speed" min="1" max="40" step="1"><span class="val" id="v-speed"></span></div>
+  <div class="ctrl"><label>Brush</label><input type="range" id="sl-brush" min="2" max="60" step="1"><span class="val" id="v-brush"></span></div>
+  <div id="palette-sel"></div>
+  <div class="hint">
+    🖱️ Click/drag to seed chemical B<br>
+    Space — pause · R — reset · C — clear
+  </div>
+</div>
+<div id="fps"></div>
+<canvas id="c"></canvas>
+
+<script>
+// === CONFIG ===
+const PRESETS = {
+  'Mitosis':     { f: 0.0367, k: 0.0649 },
+  'Coral':       { f: 0.0545, k: 0.062  },
+  'Fingerprint': { f: 0.055,  k: 0.062  },
+  'Spirals':     { f: 0.014,  k: 0.045  },
+  'Worms':       { f: 0.078,  k: 0.061  },
+  'Spots':       { f: 0.035,  k: 0.065  },
+  'Maze':        { f: 0.029,  k: 0.057  },
+  'Holes':       { f: 0.039,  k: 0.058  },
+};
+
+const PALETTES = [
+  { name: 'Plasma',   bg: '#1a0533', stops: [[0,'#0a0020'],[0.2,'#5c1a8e'],[0.4,'#c4387f'],[0.6,'#f07040'],[0.8,'#f0d050'],[1,'#ffffee']] },
+  { name: 'Ocean',    bg: '#001828', stops: [[0,'#000510'],[0.25,'#003060'],[0.5,'#0080a0'],[0.75,'#40d0b0'],[1,'#e0fff8']] },
+  { name: 'Ember',    bg: '#1a0800', stops: [[0,'#0a0000'],[0.3,'#600800'],[0.5,'#c03000'],[0.7,'#f08020'],[0.9,'#ffe060'],[1,'#fffff0']] },
+  { name: 'Mono',     bg: '#0a0a0a', stops: [[0,'#000'],[1,'#fff']] },
+  { name: 'Neon',     bg: '#000a10', stops: [[0,'#000408'],[0.2,'#00204a'],[0.4,'#006688'],[0.5,'#00ccaa'],[0.65,'#88ff44'],[0.8,'#ffee00'],[1,'#ffffff']] },
+];
+
+let params = { ...PRESETS['Coral'] };
+let stepsPerFrame = 16;
+let brushSize = 20;
+let paletteIdx = 0;
+let paused = false;
+let activePreset = 'Coral';
+
+// === WEBGL SETUP ===
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: false });
+if (!gl) { document.body.innerHTML = '<h1 style="color:#fff;padding:40px">WebGL 2 required</h1>'; throw 'no gl'; }
+
+let W, H;
+function resize() {
+  W = Math.floor(window.innerWidth / 2);  // half-res for performance
+  H = Math.floor(window.innerHeight / 2);
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  initTextures();
+  seedInitial();
+}
+
+// Fullscreen quad
+const quadVerts = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
+
+function compileShader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); return null; }
+  return s;
+}
+
+function makeProgram(vSrc, fSrc) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compileShader(gl.VERTEX_SHADER, vSrc));
+  gl.attachShader(p, compileShader(gl.FRAGMENT_SHADER, fSrc));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); return null; }
+  return p;
+}
+
+const VERT = `#version 300 es
+in vec2 pos;
+out vec2 uv;
+void main() { uv = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0, 1); }`;
+
+const SIM_FRAG = `#version 300 es
+precision highp float;
+in vec2 uv;
+out vec4 fragColor;
+uniform sampler2D uState;
+uniform vec2 uTexel;
+uniform float uF, uK;
+uniform float uDt;
+
+void main() {
+  vec2 ab = texture(uState, uv).rg;
+  float a = ab.r, b = ab.g;
+
+  // 5-point Laplacian
+  vec2 l = texture(uState, uv + vec2(-uTexel.x, 0)).rg;
+  vec2 r = texture(uState, uv + vec2( uTexel.x, 0)).rg;
+  vec2 u = texture(uState, uv + vec2(0,  uTexel.y)).rg;
+  vec2 d = texture(uState, uv + vec2(0, -uTexel.y)).rg;
+  vec2 lap = (l + r + u + d - 4.0 * ab);
+
+  float Da = 1.0, Db = 0.5;
+  float reaction = a * b * b;
+  float na = a + (Da * lap.r - reaction + uF * (1.0 - a)) * uDt;
+  float nb = b + (Db * lap.g + reaction - (uK + uF) * b) * uDt;
+
+  fragColor = vec4(clamp(na, 0.0, 1.0), clamp(nb, 0.0, 1.0), 0, 1);
+}`;
+
+const RENDER_FRAG = `#version 300 es
+precision highp float;
+in vec2 uv;
+out vec4 fragColor;
+uniform sampler2D uState;
+uniform vec3 uColors[8];
+uniform float uStops[8];
+uniform int uNumStops;
+
+vec3 palette(float t) {
+  t = clamp(t, 0.0, 1.0);
+  for (int i = 0; i < 7; i++) {
+    if (i + 1 >= uNumStops) break;
+    if (t <= uStops[i + 1]) {
+      float f = (t - uStops[i]) / (uStops[i + 1] - uStops[i]);
+      return mix(uColors[i], uColors[i + 1], smoothstep(0.0, 1.0, f));
+    }
+  }
+  return uColors[uNumStops - 1];
+}
+
+void main() {
+  vec2 ab = texture(uState, uv).rg;
+  float v = ab.g;  // chemical B concentration
+  fragColor = vec4(palette(v), 1);
+}`;
+
+const SEED_FRAG = `#version 300 es
+precision highp float;
+in vec2 uv;
+out vec4 fragColor;
+uniform sampler2D uState;
+uniform vec2 uSeedPos;
+uniform float uSeedRadius;
+uniform vec2 uTexel;
+
+void main() {
+  vec2 ab = texture(uState, uv).rg;
+  vec2 diff = (uv - uSeedPos) / uTexel;
+  float d = length(diff);
+  if (d < uSeedRadius) {
+    ab.g = 1.0;
+  }
+  fragColor = vec4(ab, 0, 1);
+}`;
+
+const simProg = makeProgram(VERT, SIM_FRAG);
+const renderProg = makeProgram(VERT, RENDER_FRAG);
+const seedProg = makeProgram(VERT, SEED_FRAG);
+
+// Uniforms
+const simU = {};
+['uState','uTexel','uF','uK','uDt'].forEach(n => simU[n] = gl.getUniformLocation(simProg, n));
+const renU = {};
+['uState','uColors','uStops','uNumStops'].forEach(n => renU[n] = gl.getUniformLocation(renderProg, n));
+const seedU = {};
+['uState','uSeedPos','uSeedRadius','uTexel'].forEach(n => seedU[n] = gl.getUniformLocation(seedProg, n));
+
+// Attribute
+[simProg, renderProg, seedProg].forEach(p => {
+  const loc = gl.getAttribLocation(p, 'pos');
+  gl.enableVertexAttribArray(loc);
+});
+
+let texA, texB, fboA, fboB;
+
+function makeTex(w, h, data) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, w, h, 0, gl.RG, gl.FLOAT, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  return t;
+}
+
+function makeFBO(tex) {
+  const f = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  return f;
+}
+
+function initTextures() {
+  if (texA) { gl.deleteTexture(texA); gl.deleteTexture(texB); gl.deleteFramebuffer(fboA); gl.deleteFramebuffer(fboB); }
+  // Check float render support
+  const ext = gl.getExtension('EXT_color_buffer_float');
+  const data = new Float32Array(W * H * 2);
+  for (let i = 0; i < W * H; i++) { data[i * 2] = 1.0; data[i * 2 + 1] = 0.0; }
+  texA = makeTex(W, H, data);
+  texB = makeTex(W, H, data);
+  fboA = makeFBO(texA);
+  fboB = makeFBO(texB);
+}
+
+function seedInitial() {
+  // Seed a few random spots of chemical B
+  const data = new Float32Array(W * H * 2);
+  for (let i = 0; i < W * H; i++) { data[i * 2] = 1.0; data[i * 2 + 1] = 0.0; }
+  const numSeeds = 12 + Math.floor(Math.random() * 8);
+  for (let s = 0; s < numSeeds; s++) {
+    const cx = Math.floor(Math.random() * W);
+    const cy = Math.floor(Math.random() * H);
+    const r = 4 + Math.floor(Math.random() * 8);
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > r * r) continue;
+        const x = (cx + dx + W) % W;
+        const y = (cy + dy + H) % H;
+        const idx = (y * W + x) * 2;
+        data[idx + 1] = 1.0;
+      }
+    }
+  }
+  gl.bindTexture(gl.TEXTURE_2D, texA);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RG, gl.FLOAT, data);
+}
+
+function drawQuad() {
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+function simStep() {
+  gl.useProgram(simProg);
+  gl.viewport(0, 0, W, H);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texA);
+  gl.uniform1i(simU.uState, 0);
+  gl.uniform2f(simU.uTexel, 1.0 / W, 1.0 / H);
+  gl.uniform1f(simU.uF, params.f);
+  gl.uniform1f(simU.uK, params.k);
+  gl.uniform1f(simU.uDt, 1.0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboB);
+  drawQuad();
+  // Swap
+  [texA, texB] = [texB, texA];
+  [fboA, fboB] = [fboB, fboA];
+}
+
+function hexToGL(hex) {
+  hex = hex.replace('#', '');
+  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+  return [parseInt(hex.slice(0,2),16)/255, parseInt(hex.slice(2,4),16)/255, parseInt(hex.slice(4,6),16)/255];
+}
+
+function render() {
+  gl.useProgram(renderProg);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texA);
+  gl.uniform1i(renU.uState, 0);
+
+  const pal = PALETTES[paletteIdx];
+  const colors = new Float32Array(24); // 8 * 3
+  const stops = new Float32Array(8);
+  pal.stops.forEach((s, i) => {
+    const c = hexToGL(s[1]);
+    colors[i*3] = c[0]; colors[i*3+1] = c[1]; colors[i*3+2] = c[2];
+    stops[i] = s[0];
+  });
+  gl.uniform3fv(renU.uColors, colors);
+  gl.uniform1fv(renU.uStops, stops);
+  gl.uniform1i(renU.uNumStops, pal.stops.length);
+  drawQuad();
+}
+
+function seedAt(px, py) {
+  const x = px / canvas.width;
+  const y = 1.0 - py / canvas.height;
+  gl.useProgram(seedProg);
+  gl.viewport(0, 0, W, H);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texA);
+  gl.uniform1i(seedU.uState, 0);
+  gl.uniform2f(seedU.uSeedPos, x, y);
+  gl.uniform1f(seedU.uSeedRadius, brushSize);
+  gl.uniform2f(seedU.uTexel, 1.0 / W, 1.0 / H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboB);
+  drawQuad();
+  [texA, texB] = [texB, texA];
+  [fboA, fboB] = [fboB, fboA];
+}
+
+// === UI ===
+const slF = document.getElementById('sl-f');
+const slK = document.getElementById('sl-k');
+const slSpeed = document.getElementById('sl-speed');
+const slBrush = document.getElementById('sl-brush');
+const vF = document.getElementById('v-f');
+const vK = document.getElementById('v-k');
+const vSpeed = document.getElementById('v-speed');
+const vBrush = document.getElementById('v-brush');
+
+function syncUI() {
+  slF.value = params.f; vF.textContent = params.f.toFixed(4);
+  slK.value = params.k; vK.textContent = params.k.toFixed(4);
+  slSpeed.value = stepsPerFrame; vSpeed.textContent = stepsPerFrame;
+  slBrush.value = brushSize; vBrush.textContent = brushSize;
+}
+
+slF.oninput = () => { params.f = +slF.value; vF.textContent = params.f.toFixed(4); activePreset = null; updatePresetBtns(); };
+slK.oninput = () => { params.k = +slK.value; vK.textContent = params.k.toFixed(4); activePreset = null; updatePresetBtns(); };
+slSpeed.oninput = () => { stepsPerFrame = +slSpeed.value; vSpeed.textContent = stepsPerFrame; };
+slBrush.oninput = () => { brushSize = +slBrush.value; vBrush.textContent = brushSize; };
+
+// Presets
+const presetsDiv = document.getElementById('presets');
+function updatePresetBtns() {
+  presetsDiv.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.textContent === activePreset));
+}
+Object.keys(PRESETS).forEach(name => {
+  const btn = document.createElement('button');
+  btn.textContent = name;
+  btn.onclick = () => {
+    params = { ...PRESETS[name] };
+    activePreset = name;
+    syncUI();
+    updatePresetBtns();
+  };
+  presetsDiv.appendChild(btn);
+});
+
+// Palette
+const palDiv = document.getElementById('palette-sel');
+PALETTES.forEach((pal, i) => {
+  const btn = document.createElement('button');
+  btn.style.background = `linear-gradient(135deg, ${pal.stops.map(s=>s[1]).join(',')})`;
+  btn.title = pal.name;
+  btn.onclick = () => { paletteIdx = i; palDiv.querySelectorAll('button').forEach((b,j) => b.classList.toggle('active', j===i)); };
+  if (i === 0) btn.classList.add('active');
+  palDiv.appendChild(btn);
+});
+
+// Mouse
+let mouseDown = false;
+canvas.addEventListener('mousedown', e => { mouseDown = true; seedAt(e.clientX, e.clientY); });
+canvas.addEventListener('mousemove', e => { if (mouseDown) seedAt(e.clientX, e.clientY); });
+canvas.addEventListener('mouseup', () => mouseDown = false);
+canvas.addEventListener('mouseleave', () => mouseDown = false);
+// Touch
+canvas.addEventListener('touchstart', e => { e.preventDefault(); const t = e.touches[0]; seedAt(t.clientX, t.clientY); }, { passive: false });
+canvas.addEventListener('touchmove', e => { e.preventDefault(); const t = e.touches[0]; seedAt(t.clientX, t.clientY); }, { passive: false });
+
+// Keyboard
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); paused = !paused; }
+  if (e.code === 'KeyR') { seedInitial(); }
+  if (e.code === 'KeyC') {
+    const data = new Float32Array(W * H * 2);
+    for (let i = 0; i < W * H; i++) { data[i * 2] = 1.0; }
+    gl.bindTexture(gl.TEXTURE_2D, texA);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RG, gl.FLOAT, data);
+  }
+});
+
+// FPS
+let frames = 0, lastFps = performance.now();
+const fpsEl = document.getElementById('fps');
+
+// === MAIN LOOP ===
+syncUI();
+updatePresetBtns();
+window.addEventListener('resize', resize);
+resize();
+
+function loop() {
+  if (!paused) {
+    for (let i = 0; i < stepsPerFrame; i++) simStep();
+  }
+  render();
+  frames++;
+  const now = performance.now();
+  if (now - lastFps > 1000) {
+    fpsEl.textContent = Math.round(frames * 1000 / (now - lastFps)) + ' fps';
+    frames = 0; lastFps = now;
+  }
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
