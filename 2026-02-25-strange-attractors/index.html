@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Strange Attractors Explorer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; color: #fff; }
+canvas { display: block; cursor: grab; }
+canvas:active { cursor: grabbing; }
+
+#ui {
+  position: fixed; top: 16px; left: 16px; z-index: 10;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+#ui > * { pointer-events: auto; }
+
+.panel {
+  background: rgba(10,10,20,0.85); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px; padding: 14px 18px; backdrop-filter: blur(12px);
+  max-width: 280px;
+}
+
+h1 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+.subtitle { font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 12px; }
+
+.attractor-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;
+}
+.attractor-btn {
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; padding: 8px 6px; color: #fff; font-size: 11px;
+  cursor: pointer; transition: all 0.2s; text-align: center;
+}
+.attractor-btn:hover { background: rgba(255,255,255,0.12); }
+.attractor-btn.active { background: rgba(100,140,255,0.25); border-color: rgba(100,140,255,0.5); }
+
+.palette-row { display: flex; gap: 6px; margin-bottom: 10px; }
+.palette-swatch {
+  width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+  border: 2px solid transparent; transition: border-color 0.2s;
+}
+.palette-swatch.active { border-color: #fff; }
+
+.slider-group { margin-bottom: 8px; }
+.slider-label {
+  display: flex; justify-content: space-between; font-size: 11px;
+  color: rgba(255,255,255,0.6); margin-bottom: 3px;
+}
+input[type=range] {
+  width: 100%; height: 4px; -webkit-appearance: none; appearance: none;
+  background: rgba(255,255,255,0.15); border-radius: 2px; outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+  background: #7090ff; cursor: pointer;
+}
+
+.info-text { font-size: 10px; color: rgba(255,255,255,0.35); line-height: 1.4; }
+
+#fps { position: fixed; top: 16px; right: 16px; font-size: 11px; color: rgba(255,255,255,0.3); z-index: 10; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <div class="panel">
+    <h1>Strange Attractors</h1>
+    <div class="subtitle">Chaotic dynamical systems — drag to rotate, scroll to zoom</div>
+    <div class="attractor-grid" id="attractorGrid"></div>
+    <div class="palette-row" id="paletteRow"></div>
+    <div class="slider-group">
+      <div class="slider-label"><span>Trail Length</span><span id="trailVal">80</span></div>
+      <input type="range" id="trailSlider" min="10" max="200" value="80">
+    </div>
+    <div class="slider-group">
+      <div class="slider-label"><span>Speed</span><span id="speedVal">1.0</span></div>
+      <input type="range" id="speedSlider" min="1" max="30" value="10">
+    </div>
+    <div class="slider-group">
+      <div class="slider-label"><span>Particles</span><span id="partVal">50k</span></div>
+      <input type="range" id="partSlider" min="10" max="200" value="50">
+    </div>
+    <div class="info-text" id="infoText"></div>
+  </div>
+</div>
+<div id="fps"></div>
+
+<script>
+// ==================== ATTRACTOR DEFINITIONS ====================
+const ATTRACTORS = {
+  lorenz: {
+    name: 'Lorenz',
+    params: { sigma: 10, rho: 28, beta: 8/3 },
+    dt: 0.005,
+    fn: `
+      float dx = p.sigma * (pos.y - pos.x);
+      float dy = pos.x * (p.rho - pos.z) - pos.y;
+      float dz = pos.x * pos.y - p.beta * pos.z;
+    `,
+    uniforms: ['sigma', 'rho', 'beta'],
+    scale: 0.04,
+    center: [0, 0, 25],
+    info: 'Edward Lorenz, 1963 — the butterfly effect. A simplified model of atmospheric convection that revealed deterministic chaos.'
+  },
+  roessler: {
+    name: 'Rössler',
+    params: { a: 0.2, b: 0.2, c: 5.7 },
+    dt: 0.008,
+    fn: `
+      float dx = -pos.y - pos.z;
+      float dy = pos.x + p.a * pos.y;
+      float dz = p.b + pos.z * (pos.x - p.c);
+    `,
+    uniforms: ['a', 'b', 'c'],
+    scale: 0.06,
+    center: [0, 0, 3],
+    info: 'Otto Rössler, 1976 — designed to be the simplest continuous chaotic system. One folding, one stretching.'
+  },
+  aizawa: {
+    name: 'Aizawa',
+    params: { a: 0.95, b: 0.7, c: 0.6, d: 3.5, e: 0.25, f: 0.1 },
+    dt: 0.005,
+    fn: `
+      float dx = (pos.z - p.b) * pos.x - p.d * pos.y;
+      float dy = p.d * pos.x + (pos.z - p.b) * pos.y;
+      float dz = p.c + p.a * pos.z - pos.z*pos.z*pos.z / 3.0 - (pos.x*pos.x + pos.y*pos.y) * (1.0 + p.e * pos.z) + p.f * pos.z * pos.x*pos.x*pos.x;
+    `,
+    uniforms: ['a', 'b', 'c', 'd', 'e', 'f'],
+    scale: 0.5,
+    center: [0, 0, 0],
+    info: 'Yoji Aizawa — a torus-shaped attractor with chaotic wandering. Looks like a cosmic jellyfish.'
+  },
+  thomas: {
+    name: 'Thomas',
+    params: { b: 0.208186 },
+    dt: 0.03,
+    fn: `
+      float dx = sin(pos.y) - p.b * pos.x;
+      float dy = sin(pos.z) - p.b * pos.y;
+      float dz = sin(pos.x) - p.b * pos.z;
+    `,
+    uniforms: ['b'],
+    scale: 0.2,
+    center: [0, 0, 0],
+    info: 'René Thomas, 1999 — cyclically symmetric chaos. Dissipative system with beautiful 3-fold symmetry.'
+  },
+  halvorsen: {
+    name: 'Halvorsen',
+    params: { a: 1.89 },
+    dt: 0.003,
+    fn: `
+      float dx = -p.a * pos.x - 4.0 * pos.y - 4.0 * pos.z - pos.y * pos.y;
+      float dy = -p.a * pos.y - 4.0 * pos.z - 4.0 * pos.x - pos.z * pos.z;
+      float dz = -p.a * pos.z - 4.0 * pos.x - 4.0 * pos.y - pos.x * pos.x;
+    `,
+    uniforms: ['a'],
+    scale: 0.07,
+    center: [0, 0, 0],
+    info: 'Halvorsen attractor — a swirling, tumbling three-lobed system with elegant rotational symmetry.'
+  },
+  chen: {
+    name: 'Chen',
+    params: { a: 5.0, b: -10.0, c: -0.38 },
+    dt: 0.002,
+    fn: `
+      float dx = p.a * pos.x - pos.y * pos.z;
+      float dy = p.b * pos.y + pos.x * pos.z;
+      float dz = p.c * pos.z + pos.x * pos.y / 3.0;
+    `,
+    uniforms: ['a', 'b', 'c'],
+    scale: 0.03,
+    center: [0, 0, 0],
+    info: 'Chen-Lee attractor — derived from the motion of rigid bodies. A chaotic cousin of Euler\'s rotation equations.'
+  },
+  dadras: {
+    name: 'Dadras',
+    params: { p1: 3.0, p2: 2.7, p3: 1.7, p4: 2.0, p5: 9.0 },
+    dt: 0.003,
+    fn: `
+      float dx = pos.y - p.p1 * pos.x + p.p2 * pos.y * pos.z;
+      float dy = p.p3 * pos.y - pos.x * pos.z + pos.z;
+      float dz = p.p4 * pos.x * pos.y - p.p5 * pos.z;
+    `,
+    uniforms: ['p1', 'p2', 'p3', 'p4', 'p5'],
+    scale: 0.06,
+    center: [0, 0, 0],
+    info: 'Dadras attractor, 2010 — a relatively recent discovery with rich, multi-scroll dynamics.'
+  },
+  sprott: {
+    name: 'Sprott',
+    params: { a: 2.07, b: 1.79 },
+    dt: 0.008,
+    fn: `
+      float dx = pos.y + p.a * pos.x * pos.y + pos.x * pos.z;
+      float dy = 1.0 - p.b * pos.x * pos.x + pos.y * pos.z;
+      float dz = pos.x - pos.x * pos.x - pos.y * pos.y;
+    `,
+    uniforms: ['a', 'b'],
+    scale: 0.3,
+    center: [0, 0, 0],
+    info: 'Sprott attractor — from Julien Clinton Sprott\'s systematic search for simple chaotic flows. Elegant minimalism.'
+  }
+};
+
+const PALETTES = [
+  { name: 'Plasma', colors: [[0.1,0.0,0.3], [0.5,0.0,0.7], [1.0,0.3,0.0], [1.0,0.9,0.2]] },
+  { name: 'Ocean', colors: [[0.0,0.05,0.15], [0.0,0.3,0.6], [0.0,0.8,0.8], [0.7,1.0,1.0]] },
+  { name: 'Fire', colors: [[0.1,0.0,0.0], [0.6,0.0,0.0], [1.0,0.5,0.0], [1.0,1.0,0.5]] },
+  { name: 'Aurora', colors: [[0.0,0.1,0.2], [0.0,0.6,0.4], [0.3,0.9,0.5], [0.8,1.0,0.9]] },
+  { name: 'Neon', colors: [[0.1,0.0,0.2], [1.0,0.0,0.5], [0.0,0.5,1.0], [0.0,1.0,0.8]] },
+];
+
+// ==================== STATE ====================
+let currentAttractor = 'lorenz';
+let currentPalette = 0;
+let trailLength = 80;
+let speed = 1.0;
+let particleCount = 50000;
+let rotX = -0.5, rotY = 0.3;
+let zoom = 1.0;
+let dragging = false, lastMX = 0, lastMY = 0;
+let autoRotate = true;
+
+// ==================== WEBGL SETUP ====================
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+if (!gl) { document.body.innerHTML = '<h1 style="color:#fff;padding:40px">WebGL 2 required</h1>'; throw 'no gl'; }
+
+function resize() {
+  canvas.width = window.innerWidth * devicePixelRatio;
+  canvas.height = window.innerHeight * devicePixelRatio;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ==================== SHADERS ====================
+function buildStepShader(attractor) {
+  const a = ATTRACTORS[attractor];
+  // Build uniform declarations
+  let uniformStruct = 'struct Params {\n';
+  for (const u of a.uniforms) uniformStruct += `  float ${u};\n`;
+  uniformStruct += '};\n';
+
+  return `#version 300 es
+precision highp float;
+uniform sampler2D uPos;
+uniform float uDt;
+uniform float uTime;
+${a.uniforms.map(u => `uniform float u_${u};`).join('\n')}
+out vec4 outPos;
+
+void main() {
+  ivec2 coord = ivec2(gl_FragCoord.xy);
+  vec4 data = texelFetch(uPos, coord, 0);
+  vec3 pos = data.xyz;
+  float age = data.w;
+
+  struct Params { ${a.uniforms.map(u => `float ${u};`).join(' ')} } p;
+  ${a.uniforms.map(u => `p.${u} = u_${u};`).join('\n  ')}
+
+  // RK4 integration
+  vec3 k1, k2, k3, k4;
+  { vec3 pos_ = pos; ${a.fn} k1 = vec3(dx, dy, dz); }
+  { vec3 pos_ = pos + 0.5 * uDt * k1; vec3 pos = pos_; ${a.fn} k2 = vec3(dx, dy, dz); }
+  { vec3 pos_ = pos + 0.5 * uDt * k2; vec3 pos = pos_; ${a.fn} k3 = vec3(dx, dy, dz); }
+  { vec3 pos_ = pos + uDt * k3; vec3 pos = pos_; ${a.fn} k4 = vec3(dx, dy, dz); }
+
+  vec3 newPos = pos + (uDt / 6.0) * (k1 + 2.0*k2 + 2.0*k3 + k4);
+
+  // Reset divergent particles
+  if (length(newPos) > 500.0 || any(isnan(newPos)) || any(isinf(newPos))) {
+    // Hash-based pseudo-random reset
+    float h = fract(sin(float(coord.x * 127 + coord.y * 311) + uTime * 0.001) * 43758.5453);
+    float h2 = fract(h * 7.123);
+    float h3 = fract(h2 * 13.456);
+    newPos = vec3(h - 0.5, h2 - 0.5, h3 - 0.5) * 2.0;
+    age = 0.0;
+  }
+
+  outPos = vec4(newPos, age + 1.0);
+}`;
+}
+
+const vsQuad = `#version 300 es
+in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0, 1); }`;
+
+const vsParticle = `#version 300 es
+precision highp float;
+uniform sampler2D uPos;
+uniform mat4 uMVP;
+uniform float uPointSize;
+uniform int uTexW;
+uniform float uTrailLen;
+
+out float vAge;
+out float vSpeed;
+
+void main() {
+  int idx = gl_VertexID;
+  int x = idx % uTexW;
+  int y = idx / uTexW;
+  vec4 data = texelFetch(uPos, ivec2(x, y), 0);
+  vec3 pos = data.xyz;
+  vAge = data.w;
+
+  gl_Position = uMVP * vec4(pos, 1.0);
+  gl_PointSize = uPointSize / max(gl_Position.w, 0.1);
+
+  // Compute approximate speed from position (used for coloring)
+  vSpeed = length(pos) * 0.05;
+}`;
+
+const fsParticle = `#version 300 es
+precision highp float;
+in float vAge;
+in float vSpeed;
+uniform vec3 uColor0, uColor1, uColor2, uColor3;
+uniform float uTrailLen;
+out vec4 fragColor;
+
+vec3 palette(float t) {
+  t = clamp(t, 0.0, 1.0);
+  if (t < 0.333) return mix(uColor0, uColor1, t * 3.0);
+  if (t < 0.666) return mix(uColor1, uColor2, (t - 0.333) * 3.0);
+  return mix(uColor2, uColor3, (t - 0.666) * 3.0);
+}
+
+void main() {
+  float d = length(gl_PointCoord - 0.5);
+  if (d > 0.5) discard;
+
+  float alpha = smoothstep(0.5, 0.2, d);
+  float ageFade = clamp(vAge / uTrailLen, 0.0, 1.0);
+  alpha *= mix(0.02, 0.35, ageFade);
+
+  vec3 col = palette(fract(vSpeed + vAge * 0.003));
+
+  fragColor = vec4(col * alpha, alpha);
+}`;
+
+const fsFade = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform float uFade;
+out vec4 fragColor;
+void main() {
+  vec2 uv = gl_FragCoord.xy / vec2(textureSize(uTex, 0));
+  fragColor = texture(uTex, uv) * uFade;
+}`;
+
+const fsCopy = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+out vec4 fragColor;
+void main() {
+  vec2 uv = gl_FragCoord.xy / vec2(textureSize(uTex, 0));
+  fragColor = texture(uTex, uv);
+}`;
+
+// ==================== GL HELPERS ====================
+function compileShader(src, type) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(s), '\n', src);
+    return null;
+  }
+  return s;
+}
+
+function makeProgram(vs, fs) {
+  const p = gl.createProgram();
+  const vsS = compileShader(vs, gl.VERTEX_SHADER);
+  const fsS = compileShader(fs, gl.FRAGMENT_SHADER);
+  if (!vsS || !fsS) return null;
+  gl.attachShader(p, vsS);
+  gl.attachShader(p, fsS);
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(p));
+    return null;
+  }
+  return p;
+}
+
+function makeTexture(w, h, data, internalFormat, format, type) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, w, h, 0, format, type, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+// Quad VAO
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+function drawQuad(prog) {
+  gl.useProgram(prog);
+  const loc = gl.getAttribLocation(prog, 'aPos');
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// ==================== MATRIX MATH ====================
+function mat4Perspective(fov, aspect, near, far) {
+  const f = 1 / Math.tan(fov / 2);
+  const nf = 1 / (near - far);
+  return new Float32Array([
+    f/aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far+near)*nf, -1,
+    0, 0, 2*far*near*nf, 0
+  ]);
+}
+
+function mat4Multiply(a, b) {
+  const r = new Float32Array(16);
+  for (let i = 0; i < 4; i++)
+    for (let j = 0; j < 4; j++)
+      r[j*4+i] = a[i]*b[j*4] + a[4+i]*b[j*4+1] + a[8+i]*b[j*4+2] + a[12+i]*b[j*4+3];
+  return r;
+}
+
+function mat4RotX(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return new Float32Array([1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1]);
+}
+function mat4RotY(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return new Float32Array([c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1]);
+}
+function mat4Translate(x,y,z) {
+  return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, x,y,z,1]);
+}
+function mat4Scale(s) {
+  return new Float32Array([s,0,0,0, 0,s,0,0, 0,0,s,0, 0,0,0,1]);
+}
+
+// ==================== ENGINE ====================
+let texW, texH;
+let posTex = [null, null], posFBO = [null, null], pingpong = 0;
+let stepProg, particleProg, fadeProg, copyProg;
+let trailFBO = [null, null], trailTex = [null, null], trailPP = 0;
+let particleVAO;
+let time = 0;
+
+function computeTexSize(count) {
+  const w = Math.ceil(Math.sqrt(count));
+  return [w, Math.ceil(count / w)];
+}
+
+function initParticles() {
+  [texW, texH] = computeTexSize(particleCount);
+  const n = texW * texH;
+  const data = new Float32Array(n * 4);
+  const a = ATTRACTORS[currentAttractor];
+  for (let i = 0; i < n; i++) {
+    data[i*4]   = (Math.random() - 0.5) * 2 + (a.center?.[0] || 0);
+    data[i*4+1] = (Math.random() - 0.5) * 2 + (a.center?.[1] || 0);
+    data[i*4+2] = (Math.random() - 0.5) * 2 + (a.center?.[2] || 0);
+    data[i*4+3] = Math.random() * trailLength; // random initial age for visual spread
+  }
+
+  for (let i = 0; i < 2; i++) {
+    if (posTex[i]) gl.deleteTexture(posTex[i]);
+    if (posFBO[i]) gl.deleteFramebuffer(posFBO[i]);
+    posTex[i] = makeTexture(texW, texH, data, gl.RGBA32F, gl.RGBA, gl.FLOAT);
+    posFBO[i] = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, posFBO[i]);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, posTex[i], 0);
+  }
+  pingpong = 0;
+}
+
+function initTrailBuffers() {
+  for (let i = 0; i < 2; i++) {
+    if (trailTex[i]) gl.deleteTexture(trailTex[i]);
+    if (trailFBO[i]) gl.deleteFramebuffer(trailFBO[i]);
+    trailTex[i] = makeTexture(canvas.width, canvas.height, null, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    trailFBO[i] = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, trailFBO[i]);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, trailTex[i], 0);
+    gl.clearColor(0,0,0,1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+  trailPP = 0;
+}
+
+function buildShaders() {
+  if (stepProg) gl.deleteProgram(stepProg);
+  stepProg = makeProgram(vsQuad, buildStepShader(currentAttractor));
+  particleProg = particleProg || makeProgram(vsParticle, fsParticle);
+  fadeProg = fadeProg || makeProgram(vsQuad, fsFade);
+  copyProg = copyProg || makeProgram(vsQuad, fsCopy);
+}
+
+function init() {
+  buildShaders();
+  initParticles();
+  initTrailBuffers();
+
+  if (!particleVAO) {
+    particleVAO = gl.createVertexArray();
+  }
+}
+
+function render() {
+  time++;
+  const a = ATTRACTORS[currentAttractor];
+  const stepsPerFrame = Math.max(1, Math.round(speed * 3));
+
+  // Step simulation
+  for (let s = 0; s < stepsPerFrame; s++) {
+    const src = pingpong, dst = 1 - pingpong;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, posFBO[dst]);
+    gl.viewport(0, 0, texW, texH);
+    gl.useProgram(stepProg);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, posTex[src]);
+    gl.uniform1i(gl.getUniformLocation(stepProg, 'uPos'), 0);
+    gl.uniform1f(gl.getUniformLocation(stepProg, 'uDt'), a.dt * speed);
+    gl.uniform1f(gl.getUniformLocation(stepProg, 'uTime'), time);
+
+    for (const u of a.uniforms) {
+      gl.uniform1f(gl.getUniformLocation(stepProg, `u_${u}`), a.params[u]);
+    }
+
+    drawQuad(stepProg);
+    pingpong = dst;
+  }
+
+  // Fade trail buffer
+  const tSrc = trailPP, tDst = 1 - trailPP;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, trailFBO[tDst]);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(fadeProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, trailTex[tSrc]);
+  gl.uniform1i(gl.getUniformLocation(fadeProg, 'uTex'), 0);
+  gl.uniform1f(gl.getUniformLocation(fadeProg, 'uFade'), 1.0 - (3.0 / trailLength));
+  drawQuad(fadeProg);
+
+  // Draw particles onto trail buffer
+  if (autoRotate) rotY += 0.002;
+
+  const aspect = canvas.width / canvas.height;
+  const proj = mat4Perspective(Math.PI / 3, aspect, 0.01, 100);
+  const sc = a.scale * zoom;
+  const cx = a.center || [0,0,0];
+  let mv = mat4Translate(0, 0, -3);
+  mv = mat4Multiply(mv, mat4RotX(rotX));
+  mv = mat4Multiply(mv, mat4RotY(rotY));
+  mv = mat4Multiply(mv, mat4Scale(sc));
+  mv = mat4Multiply(mv, mat4Translate(-cx[0], -cx[1], -cx[2]));
+  const mvp = mat4Multiply(proj, mv);
+
+  const pal = PALETTES[currentPalette].colors;
+
+  gl.useProgram(particleProg);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // additive
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, posTex[pingpong]);
+  gl.uniform1i(gl.getUniformLocation(particleProg, 'uPos'), 0);
+  gl.uniformMatrix4fv(gl.getUniformLocation(particleProg, 'uMVP'), false, mvp);
+  gl.uniform1f(gl.getUniformLocation(particleProg, 'uPointSize'), Math.min(3.0, 1.5 * devicePixelRatio));
+  gl.uniform1i(gl.getUniformLocation(particleProg, 'uTexW'), texW);
+  gl.uniform1f(gl.getUniformLocation(particleProg, 'uTrailLen'), trailLength);
+  gl.uniform3fv(gl.getUniformLocation(particleProg, 'uColor0'), pal[0]);
+  gl.uniform3fv(gl.getUniformLocation(particleProg, 'uColor1'), pal[1]);
+  gl.uniform3fv(gl.getUniformLocation(particleProg, 'uColor2'), pal[2]);
+  gl.uniform3fv(gl.getUniformLocation(particleProg, 'uColor3'), pal[3]);
+
+  gl.bindVertexArray(particleVAO);
+  gl.drawArrays(gl.POINTS, 0, texW * texH);
+  gl.bindVertexArray(null);
+  gl.disable(gl.BLEND);
+
+  trailPP = tDst;
+
+  // Copy trail to screen
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(copyProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, trailTex[tDst]);
+  gl.uniform1i(gl.getUniformLocation(copyProg, 'uTex'), 0);
+  drawQuad(copyProg);
+
+  // FPS
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFPSTime > 500) {
+    document.getElementById('fps').textContent = Math.round(frameCount / (now - lastFPSTime) * 1000) + ' fps';
+    frameCount = 0;
+    lastFPSTime = now;
+  }
+
+  requestAnimationFrame(render);
+}
+
+let frameCount = 0, lastFPSTime = performance.now();
+
+// ==================== UI ====================
+function buildUI() {
+  const grid = document.getElementById('attractorGrid');
+  grid.innerHTML = '';
+  for (const [key, a] of Object.entries(ATTRACTORS)) {
+    const btn = document.createElement('div');
+    btn.className = 'attractor-btn' + (key === currentAttractor ? ' active' : '');
+    btn.textContent = a.name;
+    btn.onclick = () => {
+      currentAttractor = key;
+      buildShaders();
+      initParticles();
+      initTrailBuffers();
+      buildUI();
+    };
+    grid.appendChild(btn);
+  }
+
+  const palRow = document.getElementById('paletteRow');
+  palRow.innerHTML = '';
+  PALETTES.forEach((p, i) => {
+    const sw = document.createElement('div');
+    sw.className = 'palette-swatch' + (i === currentPalette ? ' active' : '');
+    const c = p.colors[2];
+    sw.style.background = `linear-gradient(135deg, rgb(${p.colors[0].map(v=>v*255)}), rgb(${p.colors[2].map(v=>v*255)}))`;
+    sw.title = p.name;
+    sw.onclick = () => { currentPalette = i; initTrailBuffers(); buildUI(); };
+    palRow.appendChild(sw);
+  });
+
+  document.getElementById('infoText').textContent = ATTRACTORS[currentAttractor].info;
+}
+
+document.getElementById('trailSlider').oninput = e => {
+  trailLength = +e.target.value;
+  document.getElementById('trailVal').textContent = trailLength;
+};
+document.getElementById('speedSlider').oninput = e => {
+  speed = e.target.value / 10;
+  document.getElementById('speedVal').textContent = speed.toFixed(1);
+};
+document.getElementById('partSlider').oninput = e => {
+  const v = +e.target.value;
+  particleCount = v * 1000;
+  document.getElementById('partVal').textContent = v + 'k';
+  initParticles();
+  initTrailBuffers();
+};
+
+// Mouse interaction
+canvas.addEventListener('mousedown', e => { dragging = true; autoRotate = false; lastMX = e.clientX; lastMY = e.clientY; });
+canvas.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  rotY += (e.clientX - lastMX) * 0.005;
+  rotX += (e.clientY - lastMY) * 0.005;
+  rotX = Math.max(-Math.PI/2, Math.min(Math.PI/2, rotX));
+  lastMX = e.clientX; lastMY = e.clientY;
+});
+canvas.addEventListener('mouseup', () => dragging = false);
+canvas.addEventListener('wheel', e => {
+  zoom *= e.deltaY > 0 ? 0.9 : 1.1;
+  zoom = Math.max(0.1, Math.min(10, zoom));
+  e.preventDefault();
+}, { passive: false });
+
+// Touch
+canvas.addEventListener('touchstart', e => {
+  if (e.touches.length === 1) {
+    dragging = true; autoRotate = false;
+    lastMX = e.touches[0].clientX; lastMY = e.touches[0].clientY;
+  }
+});
+canvas.addEventListener('touchmove', e => {
+  if (dragging && e.touches.length === 1) {
+    rotY += (e.touches[0].clientX - lastMX) * 0.005;
+    rotX += (e.touches[0].clientY - lastMY) * 0.005;
+    rotX = Math.max(-Math.PI/2, Math.min(Math.PI/2, rotX));
+    lastMX = e.touches[0].clientX; lastMY = e.touches[0].clientY;
+  }
+  e.preventDefault();
+}, { passive: false });
+canvas.addEventListener('touchend', () => dragging = false);
+
+// Resize handler
+const origResize = resize;
+resize = function() {
+  origResize();
+  initTrailBuffers();
+};
+
+// Go!
+buildUI();
+init();
+render();
+</script>
+</body>
+</html>
