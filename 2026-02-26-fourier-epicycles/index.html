@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Fourier Epicycle Drawing Machine</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden; height: 100vh; display: flex; flex-direction: column;
+    touch-action: none; -webkit-touch-callout: none; user-select: none;
+  }
+  canvas { display: block; flex: 1; cursor: crosshair; }
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 10px 16px; background: #111; border-top: 1px solid #222;
+    font-size: 13px; z-index: 10;
+  }
+  .controls label { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .controls input[type=range] { width: 90px; accent-color: #0ff; }
+  .controls select, .controls button {
+    background: #1a1a1a; color: #e0e0e0; border: 1px solid #333;
+    border-radius: 4px; padding: 5px 10px; font-size: 13px; cursor: pointer;
+  }
+  .controls button:hover { background: #252525; }
+  .controls button.active { background: #0ff; color: #000; border-color: #0ff; }
+  .controls .sep { width: 1px; height: 20px; background: #333; }
+  #info {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    color: #555; font-size: 18px; pointer-events: none; text-align: center;
+    transition: opacity .3s;
+  }
+  @media (max-width: 600px) {
+    .controls { gap: 6px; padding: 8px 10px; font-size: 12px; }
+    .controls input[type=range] { width: 60px; }
+    .controls .sep { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">Draw a shape or pick a preset ↓</div>
+<div class="controls">
+  <select id="preset">
+    <option value="">Presets…</option>
+    <option value="star">★ Star</option>
+    <option value="infinity">∞ Infinity</option>
+    <option value="treble">𝄞 Treble Clef</option>
+    <option value="heart">♥ Heart</option>
+  </select>
+  <div class="sep"></div>
+  <label>Epicycles <span id="nVal">50</span>
+    <input type="range" id="nEpi" min="1" max="200" value="50">
+  </label>
+  <label>Speed
+    <input type="range" id="speed" min="1" max="20" value="5">
+  </label>
+  <div class="sep"></div>
+  <button id="btnPlay">▶ Play</button>
+  <button id="btnReset">↺ Reset</button>
+  <button id="btnOrig">Show Original</button>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const info = document.getElementById('info');
+
+let W, H, cx, cy;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight - document.querySelector('.controls').offsetHeight;
+  cx = W / 2; cy = H / 2;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// State
+let drawPath = [];       // raw user path [{x,y}]
+let fourier = [];        // sorted DFT coefficients
+let time = 0;
+let tracePoints = [];
+let playing = false;
+let showOriginal = true;
+let animId = null;
+
+// Controls
+const nEpiSlider = document.getElementById('nEpi');
+const nValSpan = document.getElementById('nVal');
+const speedSlider = document.getElementById('speed');
+const btnPlay = document.getElementById('btnPlay');
+const btnReset = document.getElementById('btnReset');
+const btnOrig = document.getElementById('btnOrig');
+const presetSel = document.getElementById('preset');
+
+nEpiSlider.oninput = () => {
+  nValSpan.textContent = nEpiSlider.value;
+  if (fourier.length) { tracePoints = []; time = 0; }
+};
+btnPlay.onclick = togglePlay;
+btnReset.onclick = reset;
+btnOrig.onclick = () => {
+  showOriginal = !showOriginal;
+  btnOrig.classList.toggle('active', showOriginal);
+};
+btnOrig.classList.add('active');
+presetSel.onchange = () => {
+  if (!presetSel.value) return;
+  loadPreset(presetSel.value);
+  presetSel.value = '';
+};
+
+// Drawing
+let drawing = false;
+function getPos(e) {
+  const t = e.touches ? e.touches[0] : e;
+  return { x: t.clientX, y: t.clientY };
+}
+canvas.addEventListener('mousedown', startDraw);
+canvas.addEventListener('mousemove', moveDraw);
+canvas.addEventListener('mouseup', endDraw);
+canvas.addEventListener('touchstart', e => { e.preventDefault(); startDraw(e); });
+canvas.addEventListener('touchmove', e => { e.preventDefault(); moveDraw(e); });
+canvas.addEventListener('touchend', e => { e.preventDefault(); endDraw(e); });
+
+function startDraw(e) {
+  if (playing) return;
+  drawing = true;
+  drawPath = [];
+  fourier = [];
+  tracePoints = [];
+  time = 0;
+  info.style.opacity = '0';
+  const p = getPos(e);
+  drawPath.push(p);
+}
+function moveDraw(e) {
+  if (!drawing) return;
+  drawPath.push(getPos(e));
+}
+function endDraw() {
+  if (!drawing) return;
+  drawing = false;
+  if (drawPath.length > 10) computeDFT();
+}
+
+// DFT
+function dft(points) {
+  const N = points.length;
+  const X = [];
+  for (let k = 0; k < N; k++) {
+    let re = 0, im = 0;
+    for (let n = 0; n < N; n++) {
+      const phi = (2 * Math.PI * k * n) / N;
+      re += points[n].x * Math.cos(phi) + points[n].y * Math.sin(phi);
+      im += points[n].y * Math.cos(phi) - points[n].x * Math.sin(phi);
+    }
+    re /= N; im /= N;
+    X.push({ re, im, freq: k, amp: Math.sqrt(re*re + im*im), phase: Math.atan2(im, re) });
+  }
+  return X.sort((a, b) => b.amp - a.amp);
+}
+
+function computeDFT() {
+  // Resample to ~200 points for performance
+  const resampled = resample(drawPath, Math.min(drawPath.length, 300));
+  // Center the path
+  let mx = 0, my = 0;
+  resampled.forEach(p => { mx += p.x; my += p.y; });
+  mx /= resampled.length; my /= resampled.length;
+  const centered = resampled.map(p => ({ x: p.x - mx, y: p.y - my }));
+  fourier = dft(centered);
+  nEpiSlider.max = fourier.length;
+  if (+nEpiSlider.value > fourier.length) nEpiSlider.value = fourier.length;
+  nValSpan.textContent = nEpiSlider.value;
+  // Store offset for rendering
+  fourier._cx = mx; fourier._cy = my;
+}
+
+function resample(pts, n) {
+  if (pts.length <= n) return pts.slice();
+  const out = [];
+  const step = (pts.length - 1) / (n - 1);
+  for (let i = 0; i < n; i++) {
+    const idx = i * step;
+    const lo = Math.floor(idx), hi = Math.ceil(idx);
+    const t = idx - lo;
+    if (lo === hi || hi >= pts.length) out.push(pts[lo]);
+    else out.push({ x: pts[lo].x*(1-t)+pts[hi].x*t, y: pts[lo].y*(1-t)+pts[hi].y*t });
+  }
+  return out;
+}
+
+// Animation
+function togglePlay() {
+  if (!fourier.length) return;
+  playing = !playing;
+  btnPlay.textContent = playing ? '⏸ Pause' : '▶ Play';
+  if (playing) animate();
+  else cancelAnimationFrame(animId);
+}
+
+function reset() {
+  playing = false;
+  btnPlay.textContent = '▶ Play';
+  cancelAnimationFrame(animId);
+  drawPath = []; fourier = []; tracePoints = []; time = 0;
+  info.style.opacity = '1';
+  ctx.clearRect(0, 0, W, H);
+}
+
+function animate() {
+  if (!playing) return;
+  ctx.clearRect(0, 0, W, H);
+
+  const N = fourier.length;
+  const nEpi = Math.min(+nEpiSlider.value, N);
+  const ocx = fourier._cx || cx;
+  const ocy = fourier._cy || cy;
+
+  // Draw original path
+  if (showOriginal && drawPath.length > 1) {
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1.5;
+    drawPath.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // Epicycles
+  let x = ocx, y = ocy;
+  for (let i = 0; i < nEpi; i++) {
+    const { amp, freq, phase } = fourier[i];
+    const prevX = x, prevY = y;
+    const angle = freq * time * 2 * Math.PI / N + phase;
+    x += amp * Math.cos(angle);
+    y -= amp * Math.sin(angle);
+
+    // Circle
+    ctx.beginPath();
+    ctx.arc(prevX, prevY, amp, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${(i / nEpi) * 300 + 180}, 100%, 60%, ${0.15 + 0.15 * (1 - i/nEpi)})`;
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // Radius line
+    ctx.beginPath();
+    ctx.moveTo(prevX, prevY);
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = `hsla(${(i / nEpi) * 300 + 180}, 80%, 70%, 0.4)`;
+    ctx.lineWidth = 0.6;
+    ctx.stroke();
+  }
+
+  // Tip dot
+  ctx.beginPath();
+  ctx.arc(x, y, 3, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+
+  // Trace
+  tracePoints.push({ x, y });
+
+  if (tracePoints.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(tracePoints[0].x, tracePoints[0].y);
+    for (let i = 1; i < tracePoints.length; i++) {
+      ctx.lineTo(tracePoints[i].x, tracePoints[i].y);
+    }
+    ctx.strokeStyle = '#0ff';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = 8;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  // Advance time
+  const spd = +speedSlider.value;
+  time += spd * 0.15;
+
+  // Loop after one full cycle
+  if (time >= N) {
+    time = 0;
+    tracePoints = [];
+  }
+
+  animId = requestAnimationFrame(animate);
+}
+
+// Presets
+function loadPreset(name) {
+  if (playing) { playing = false; btnPlay.textContent = '▶ Play'; cancelAnimationFrame(animId); }
+  info.style.opacity = '0';
+  const scale = Math.min(W, H) * 0.3;
+  let pts = [];
+  const n = 300;
+
+  if (name === 'star') {
+    for (let i = 0; i < n; i++) {
+      const t = (i / n) * Math.PI * 2;
+      const r = (i % (n/5) < n/10) ? scale : scale * 0.45;
+      // Smooth star
+      const angle = t;
+      const R = scale * (0.5 + 0.5 * Math.cos(5 * angle));
+      pts.push({ x: cx + R * Math.cos(angle), y: cy + R * Math.sin(angle) });
+    }
+  } else if (name === 'infinity') {
+    for (let i = 0; i < n; i++) {
+      const t = (i / n) * Math.PI * 2;
+      const s = scale * 0.9;
+      const denom = 1 + Math.sin(t) * Math.sin(t);
+      pts.push({ x: cx + s * Math.cos(t) / denom, y: cy + s * Math.sin(t) * Math.cos(t) / denom });
+    }
+  } else if (name === 'treble') {
+    // Approximate treble clef as a parametric curve
+    for (let i = 0; i < n; i++) {
+      const t = (i / n) * Math.PI * 6 - Math.PI * 3;
+      const r = scale * 0.15 * (3 + Math.cos(t * 1.5));
+      const x = r * Math.sin(t) + scale * 0.15 * Math.sin(t * 0.5);
+      const y = r * Math.cos(t) * 0.8 + t * scale * 0.08;
+      pts.push({ x: cx + x, y: cy + y - scale * 0.3 });
+    }
+  } else if (name === 'heart') {
+    for (let i = 0; i < n; i++) {
+      const t = (i / n) * Math.PI * 2;
+      const s = scale * 0.06;
+      const x = s * 16 * Math.pow(Math.sin(t), 3);
+      const y = -s * (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
+      pts.push({ x: cx + x, y: cy + y });
+    }
+  }
+
+  drawPath = pts;
+  computeDFT();
+  tracePoints = []; time = 0;
+  // Auto-play
+  playing = true;
+  btnPlay.textContent = '⏸ Pause';
+  animate();
+}
+
+// Initial render
+ctx.clearRect(0, 0, W, H);
+
+// Idle draw loop when not playing
+function idleDraw() {
+  if (playing) return requestAnimationFrame(idleDraw);
+  ctx.clearRect(0, 0, W, H);
+  if (drawPath.length > 1) {
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(0, 255, 255, 0.5)';
+    ctx.lineWidth = 2;
+    drawPath.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.stroke();
+  }
+  requestAnimationFrame(idleDraw);
+}
+idleDraw();
+</script>
+</body>
+</html>
