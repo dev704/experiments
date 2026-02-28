@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wave Function Collapse</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0a0f;--panel:#14141f;--border:#2a2a3a;--text:#e0e0e8;--dim:#666680;--accent:#6c5ce7;--accent2:#00cec9;--danger:#ff4757}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+header{padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:18px;font-weight:600;color:var(--accent2);white-space:nowrap}
+.controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.control-group{display:flex;align-items:center;gap:6px}
+label{font-size:12px;color:var(--dim);white-space:nowrap}
+select,button{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;transition:all .15s}
+select:hover,button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover{background:#7c6cf7}
+button.active{background:var(--accent2);border-color:var(--accent2);color:#000}
+input[type=range]{width:80px;accent-color:var(--accent)}
+.val{font-size:12px;color:var(--accent2);min-width:28px;text-align:center}
+main{flex:1;display:flex;justify-content:center;align-items:center;padding:10px;overflow:hidden}
+canvas{border-radius:8px;cursor:crosshair;max-width:100%;max-height:100%}
+.status{padding:6px 20px;background:var(--panel);border-top:1px solid var(--border);font-size:12px;color:var(--dim);display:flex;justify-content:space-between}
+#tileMenu{position:fixed;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px;display:none;z-index:100;flex-wrap:wrap;gap:4px;max-width:240px}
+#tileMenu canvas{cursor:pointer;border-radius:4px;border:2px solid transparent;transition:border-color .1s}
+#tileMenu canvas:hover{border-color:var(--accent)}
+@media(max-width:640px){header{padding:8px 12px;gap:8px}header h1{font-size:15px}.controls{gap:6px}select,button{padding:4px 8px;font-size:12px}input[type=range]{width:60px}}
+</style>
+</head>
+<body>
+<header>
+<h1>⟨ψ⟩ WFC</h1>
+<div class="controls">
+<div class="control-group">
+<label>Tileset</label>
+<select id="tilesetSel"></select>
+</div>
+<div class="control-group">
+<label>Grid</label>
+<input type="range" id="gridSize" min="10" max="50" value="20">
+<span class="val" id="gridVal">20</span>
+</div>
+<div class="control-group">
+<label>Speed</label>
+<input type="range" id="speed" min="1" max="20" value="3">
+<span class="val" id="speedVal">3</span>
+</div>
+<div class="control-group">
+<button id="playBtn" class="primary">▶ Play</button>
+<button id="stepBtn">Step</button>
+<button id="newBtn">New</button>
+</div>
+<div class="control-group">
+<button id="heatBtn">Heatmap</button>
+</div>
+</div>
+</header>
+<main><canvas id="cv"></canvas></main>
+<div class="status"><span id="statusText">Ready</span><span id="statsText"></span></div>
+<div id="tileMenu"></div>
+
+<script>
+// ====== TILESET DEFINITIONS ======
+const TILESETS = {};
+
+// Socket convention: strings. Matching sockets connect.
+// Each base tile: { name, sockets:[N,E,S,W], color, draw(ctx,x,y,s) }
+
+function rotSockets(s,r){let o=[...s];for(let i=0;i<r;i++){o=[o[3],o[0],o[1],o[2]]}return o}
+
+// --- CIRCUIT BOARD ---
+(function(){
+const S={E:'e',L:'l',B:'b'}; // empty, line, blank
+const base=[
+{name:'empty',sockets:['b','b','b','b'],rot:false,
+draw(c,x,y,s){c.fillStyle='#0d1117';c.fillRect(x,y,s,s)}},
+{name:'line',sockets:['l','b','l','b'],rot:true,
+draw(c,x,y,s){c.fillStyle='#0d1117';c.fillRect(x,y,s,s);c.strokeStyle='#00ff88';c.lineWidth=Math.max(2,s/5);c.beginPath();c.moveTo(x+s/2,y);c.lineTo(x+s/2,y+s);c.stroke()}},
+{name:'corner',sockets:['l','l','b','b'],rot:true,
+draw(c,x,y,s){c.fillStyle='#0d1117';c.fillRect(x,y,s,s);c.strokeStyle='#00ff88';c.lineWidth=Math.max(2,s/5);c.beginPath();c.moveTo(x+s/2,y);c.lineTo(x+s/2,y+s/2);c.lineTo(x+s,y+s/2);c.stroke()}},
+{name:'t-junction',sockets:['l','l','l','b'],rot:true,
+draw(c,x,y,s){c.fillStyle='#0d1117';c.fillRect(x,y,s,s);c.strokeStyle='#00ff88';c.lineWidth=Math.max(2,s/5);c.beginPath();c.moveTo(x+s/2,y);c.lineTo(x+s/2,y+s);c.stroke();c.beginPath();c.moveTo(x+s/2,y+s/2);c.lineTo(x+s,y+s/2);c.stroke()}},
+{name:'cross',sockets:['l','l','l','l'],rot:false,
+draw(c,x,y,s){c.fillStyle='#0d1117';c.fillRect(x,y,s,s);c.strokeStyle='#00ff88';c.lineWidth=Math.max(2,s/5);c.beginPath();c.moveTo(x+s/2,y);c.lineTo(x+s/2,y+s);c.stroke();c.beginPath();c.moveTo(x,y+s/2);c.lineTo(x+s,y+s/2);c.stroke()}},
+{name:'component',sockets:['b','b','b','b'],rot:false,
+draw(c,x,y,s){c.fillStyle='#0d1117';c.fillRect(x,y,s,s);c.fillStyle='#1a3a2a';const m=s*0.2;c.fillRect(x+m,y+m,s-2*m,s-2*m);c.fillStyle='#00ff88';c.fillRect(x+s*0.35,y+s*0.35,s*0.3,s*0.3)}}
+];
+TILESETS['Circuit Board']={base,bg:'#0d1117'};
+})();
+
+// --- PIPES ---
+(function(){
+const base=[
+{name:'empty',sockets:['e','e','e','e'],rot:false,
+draw(c,x,y,s){c.fillStyle='#1a1a2e';c.fillRect(x,y,s,s)}},
+{name:'pipe-straight',sockets:['p','e','p','e'],rot:true,
+draw(c,x,y,s){c.fillStyle='#1a1a2e';c.fillRect(x,y,s,s);const w=s*0.3;c.fillStyle='#4a6fa5';c.fillRect(x+s/2-w/2,y,w,s);c.fillStyle='#5a8fc5';c.fillRect(x+s/2-w/4,y,w/2,s)}},
+{name:'pipe-bend',sockets:['p','p','e','e'],rot:true,
+draw(c,x,y,s){c.fillStyle='#1a1a2e';c.fillRect(x,y,s,s);const w=s*0.3;c.fillStyle='#4a6fa5';c.fillRect(x+s/2-w/2,y,w,s/2+w/2);c.fillRect(x+s/2-w/2,y+s/2-w/2,s/2+w/2,w);c.fillStyle='#5a8fc5';c.fillRect(x+s/2-w/4,y,w/2,s/2+w/4);c.fillRect(x+s/2-w/4,y+s/2-w/4,s/2+w/4,w/2)}},
+{name:'pipe-T',sockets:['p','p','p','e'],rot:true,
+draw(c,x,y,s){c.fillStyle='#1a1a2e';c.fillRect(x,y,s,s);const w=s*0.3;c.fillStyle='#4a6fa5';c.fillRect(x+s/2-w/2,y,w,s);c.fillRect(x+s/2,y+s/2-w/2,s/2,w);c.fillStyle='#5a8fc5';c.fillRect(x+s/2-w/4,y,w/2,s);c.fillRect(x+s/2,y+s/2-w/4,s/2,w/2)}},
+{name:'pipe-cross',sockets:['p','p','p','p'],rot:false,
+draw(c,x,y,s){c.fillStyle='#1a1a2e';c.fillRect(x,y,s,s);const w=s*0.3;c.fillStyle='#4a6fa5';c.fillRect(x+s/2-w/2,y,w,s);c.fillRect(x,y+s/2-w/2,s,w);c.fillStyle='#5a8fc5';c.fillRect(x+s/2-w/4,y,w/2,s);c.fillRect(x,y+s/2-w/4,s,w/2)}},
+{name:'valve',sockets:['p','e','p','e'],rot:true,
+draw(c,x,y,s){c.fillStyle='#1a1a2e';c.fillRect(x,y,s,s);const w=s*0.3;c.fillStyle='#4a6fa5';c.fillRect(x+s/2-w/2,y,w,s);c.fillStyle='#e74c3c';c.beginPath();c.arc(x+s/2,y+s/2,w*0.6,0,Math.PI*2);c.fill()}}
+];
+TILESETS['Pipes']={base,bg:'#1a1a2e'};
+})();
+
+// --- TERRAIN ---
+(function(){
+// Sockets: s=sea, c=coast, l=land
+const base=[
+{name:'sea',sockets:['s','s','s','s'],rot:false,w:3,
+draw(c,x,y,s){c.fillStyle='#1a5276';c.fillRect(x,y,s,s)}},
+{name:'land',sockets:['l','l','l','l'],rot:false,w:3,
+draw(c,x,y,s){c.fillStyle='#27ae60';c.fillRect(x,y,s,s)}},
+{name:'coast-straight',sockets:['s','c','l','c'],rot:true,
+draw(c,x,y,s){c.fillStyle='#27ae60';c.fillRect(x,y,s,s);c.fillStyle='#1a5276';c.fillRect(x,y,s,s*0.4);c.fillStyle='#f4d03f';c.fillRect(x,y+s*0.35,s,s*0.1)}},
+{name:'coast-corner',sockets:['s','s','l','l'],rot:true,
+draw(c,x,y,s){c.fillStyle='#27ae60';c.fillRect(x,y,s,s);c.fillStyle='#1a5276';c.beginPath();c.moveTo(x,y);c.lineTo(x+s,y);c.lineTo(x,y+s);c.fill();c.fillStyle='#f4d03f';c.beginPath();c.moveTo(x+s,y);c.lineTo(x,y+s);c.lineTo(x+s*0.1,y+s);c.lineTo(x+s,y+s*0.1);c.fill()}},
+{name:'coast-inner',sockets:['l','l','l','l'],rot:true,
+draw(c,x,y,s){c.fillStyle='#27ae60';c.fillRect(x,y,s,s);c.fillStyle='#1a5276';c.beginPath();c.arc(x,y,s*0.35,0,Math.PI/2);c.lineTo(x,y);c.fill()}}
+];
+// Fix coast adjacency: coast-straight N=s,E=c,S=l,W=c
+// coast-corner N=s,E=s,S=l,W=l (outer corner: sea on two sides)
+// coast-inner: all land but with a sea nook (inner corner)
+// For simplicity, use a compatible socket scheme:
+// sea edges: 's', land edges: 'l', coast edges: 'c' where c matches c and s matches s and l matches l
+TILESETS['Terrain']={base,bg:'#1a5276'};
+})();
+
+// --- ABSTRACT GEOMETRIC ---
+(function(){
+// Sockets: 0=flat, 1=triangle-up, 2=triangle-down
+const base=[
+{name:'solid-a',sockets:['0','0','0','0'],rot:false,
+draw(c,x,y,s){c.fillStyle='#6c5ce7';c.fillRect(x,y,s,s)}},
+{name:'solid-b',sockets:['0','0','0','0'],rot:false,
+draw(c,x,y,s){c.fillStyle='#e17055';c.fillRect(x,y,s,s)}},
+{name:'diagonal',sockets:['1','2','1','2'],rot:true,
+draw(c,x,y,s){c.fillStyle='#6c5ce7';c.fillRect(x,y,s,s);c.fillStyle='#fdcb6e';c.beginPath();c.moveTo(x,y);c.lineTo(x+s,y);c.lineTo(x+s,y+s);c.fill()}},
+{name:'diamond',sockets:['1','1','1','1'],rot:false,
+draw(c,x,y,s){c.fillStyle='#2d3436';c.fillRect(x,y,s,s);c.fillStyle='#00cec9';c.beginPath();c.moveTo(x+s/2,y);c.lineTo(x+s,y+s/2);c.lineTo(x+s/2,y+s);c.lineTo(x,y+s/2);c.fill()}},
+{name:'stripe',sockets:['0','1','0','1'],rot:true,
+draw(c,x,y,s){c.fillStyle='#2d3436';c.fillRect(x,y,s,s);c.fillStyle='#fd79a8';const n=4;for(let i=0;i<n;i++){if(i%2===0)c.fillRect(x,y+i*s/n,s,s/n)}}},
+{name:'circle',sockets:['0','0','0','0'],rot:false,
+draw(c,x,y,s){c.fillStyle='#2d3436';c.fillRect(x,y,s,s);c.fillStyle='#a29bfe';c.beginPath();c.arc(x+s/2,y+s/2,s*0.4,0,Math.PI*2);c.fill()}}
+];
+TILESETS['Abstract Geometric']={base,bg:'#2d3436'};
+})();
+
+// ====== GENERATE ROTATED TILES ======
+function buildTiles(tileset){
+const tiles=[];
+for(const b of tileset.base){
+const rots=b.rot?[0,1,2,3]:[0];
+for(const r of rots){
+const sockets=rotSockets(b.sockets,r);
+// Create rotated draw function
+const origDraw=b.draw;
+tiles.push({
+name:b.name+'_r'+r,
+sockets,
+weight:b.w||1,
+draw(c,x,y,s){
+c.save();
+c.translate(x+s/2,y+s/2);
+c.rotate(r*Math.PI/2);
+c.translate(-s/2,-s/2);
+origDraw(c,0,0,s);
+c.restore();
+}
+});
+}
+}
+return tiles;
+}
+
+// ====== WFC ENGINE ======
+class WFC{
+constructor(w,h,tiles){
+this.w=w;this.h=h;this.tiles=tiles;
+this.grid=[];this.collapsed=0;this.done=false;this.contradiction=false;
+this.contradictionCell=null;
+this.lastCollapsed=null;this.propagated=new Set();
+this.init();
+}
+init(){
+const all=this.tiles.map((_,i)=>i);
+this.grid=[];
+for(let i=0;i<this.w*this.h;i++){
+this.grid.push({options:new Set(all),collapsed:false,tile:null,flash:0});
+}
+this.collapsed=0;this.done=false;this.contradiction=false;this.contradictionCell=null;
+this.lastCollapsed=null;this.propagated=new Set();
+}
+entropy(i){
+const cell=this.grid[i];
+if(cell.collapsed)return Infinity;
+return cell.options.size;
+}
+findMinEntropy(){
+let min=Infinity,candidates=[];
+for(let i=0;i<this.grid.length;i++){
+if(this.grid[i].collapsed)continue;
+const e=this.grid[i].options.size;
+if(e<min){min=e;candidates=[i]}
+else if(e===min)candidates.push(i);
+}
+if(candidates.length===0)return-1;
+return candidates[Math.floor(Math.random()*candidates.length)];
+}
+collapse(idx){
+const cell=this.grid[idx];
+if(cell.options.size===0){this.contradiction=true;this.contradictionCell=idx;return false}
+// Weighted random
+const opts=[...cell.options];
+let totalW=0;for(const o of opts)totalW+=this.tiles[o].weight;
+let r=Math.random()*totalW;
+let chosen=opts[0];
+for(const o of opts){r-=this.tiles[o].weight;if(r<=0){chosen=o;break}}
+cell.options=new Set([chosen]);
+cell.collapsed=true;cell.tile=chosen;cell.flash=1;
+this.collapsed++;this.lastCollapsed=idx;
+return true;
+}
+collapseToTile(idx,tileIdx){
+const cell=this.grid[idx];
+if(!cell.options.has(tileIdx))return false;
+cell.options=new Set([tileIdx]);
+cell.collapsed=true;cell.tile=tileIdx;cell.flash=1;
+this.collapsed++;this.lastCollapsed=idx;
+return true;
+}
+neighbors(idx){
+const x=idx%this.w,y=Math.floor(idx/this.w),n=[];
+if(y>0)n.push([idx-this.w,0]); // N
+if(x<this.w-1)n.push([idx+1,1]); // E
+if(y<this.h-1)n.push([idx+this.w,2]); // S
+if(x>0)n.push([idx-1,3]); // W
+return n;
+}
+propagate(startIdx){
+const stack=[startIdx];
+this.propagated=new Set();
+const opposite=[2,3,0,1];
+while(stack.length>0){
+const cur=stack.pop();
+this.propagated.add(cur);
+const curOpts=this.grid[cur].options;
+for(const [nIdx,dir] of this.neighbors(cur)){
+const nCell=this.grid[nIdx];
+if(nCell.collapsed)continue;
+const validSockets=new Set();
+for(const o of curOpts){
+validSockets.add(this.tiles[o].sockets[dir]);
+}
+const before=nCell.options.size;
+const toRemove=[];
+for(const o of nCell.options){
+const nSocket=this.tiles[o].sockets[opposite[dir]];
+if(!validSockets.has(nSocket))toRemove.push(o);
+}
+for(const o of toRemove)nCell.options.delete(o);
+if(nCell.options.size===0){
+this.contradiction=true;this.contradictionCell=nIdx;return;
+}
+if(nCell.options.size<before)stack.push(nIdx);
+}
+}
+}
+step(){
+if(this.done||this.contradiction)return false;
+const idx=this.findMinEntropy();
+if(idx===-1){this.done=true;return false}
+if(!this.collapse(idx))return false;
+this.propagate(idx);
+if(this.collapsed===this.w*this.h)this.done=true;
+return true;
+}
+}
+
+// ====== UI ======
+const cv=document.getElementById('cv');
+const ctx=cv.getContext('2d');
+const tilesetSel=document.getElementById('tilesetSel');
+const gridSlider=document.getElementById('gridSize');
+const gridVal=document.getElementById('gridVal');
+const speedSlider=document.getElementById('speed');
+const speedVal=document.getElementById('speedVal');
+const playBtn=document.getElementById('playBtn');
+const stepBtn=document.getElementById('stepBtn');
+const newBtn=document.getElementById('newBtn');
+const heatBtn=document.getElementById('heatBtn');
+const statusText=document.getElementById('statusText');
+const statsText=document.getElementById('statsText');
+const tileMenu=document.getElementById('tileMenu');
+
+for(const name of Object.keys(TILESETS)){
+const o=document.createElement('option');o.value=name;o.textContent=name;
+tilesetSel.appendChild(o);
+}
+
+let tiles=[], wfc=null, playing=false, showHeat=false, cellSize=20, animFrame=0;
+let tileMenuCell=-1;
+
+function resize(){
+const main=document.querySelector('main');
+const maxW=main.clientWidth-20, maxH=main.clientHeight-20;
+const gs=parseInt(gridSlider.value);
+cellSize=Math.floor(Math.min(maxW/gs,maxH/gs));
+cellSize=Math.max(cellSize,4);
+cv.width=gs*cellSize;cv.height=gs*cellSize;
+}
+
+function restart(){
+const gs=parseInt(gridSlider.value);
+tiles=buildTiles(TILESETS[tilesetSel.value]);
+resize();
+wfc=new WFC(gs,gs,tiles);
+statusText.textContent='Ready — '+tiles.length+' tiles';
+}
+
+function drawShimmer(x,y,s,opts,total,frame){
+// Quantum shimmer for uncollapsed cells
+const t=frame*0.05;
+const cx=x+s/2,cy=y+s/2;
+const entropy=opts/total;
+const base=TILESETS[tilesetSel.value].bg||'#111';
+ctx.fillStyle=base;
+ctx.fillRect(x,y,s,s);
+// Shimmer dots
+for(let i=0;i<3;i++){
+const ox=Math.sin(t+i*2.1+x*0.1)*s*0.25;
+const oy=Math.cos(t+i*1.7+y*0.1)*s*0.25;
+const alpha=0.15+entropy*0.2;
+ctx.fillStyle=`rgba(108,92,231,${alpha})`;
+ctx.beginPath();
+ctx.arc(cx+ox,cy+oy,s*0.12,0,Math.PI*2);
+ctx.fill();
+}
+}
+
+function drawHeatOverlay(x,y,s,opts,total){
+if(!showHeat||opts<=1)return;
+const ratio=opts/total;
+const r=Math.floor(255*ratio);
+const b=Math.floor(255*(1-ratio));
+ctx.fillStyle=`rgba(${r},40,${b},0.35)`;
+ctx.fillRect(x,y,s,s);
+}
+
+function draw(){
+if(!wfc)return;
+const gs=wfc.w;
+ctx.clearRect(0,0,cv.width,cv.height);
+for(let i=0;i<wfc.grid.length;i++){
+const cell=wfc.grid[i];
+const x=(i%gs)*cellSize, y=Math.floor(i/gs)*cellSize;
+if(cell.collapsed){
+tiles[cell.tile].draw(ctx,x,y,cellSize);
+// Flash effect
+if(cell.flash>0){
+ctx.fillStyle=`rgba(255,255,255,${cell.flash*0.4})`;
+ctx.fillRect(x,y,cellSize,cellSize);
+cell.flash=Math.max(0,cell.flash-0.06);
+}
+}else{
+drawShimmer(x,y,cellSize,cell.options.size,tiles.length,animFrame);
+}
+drawHeatOverlay(x,y,cellSize,cell.options.size,tiles.length);
+// Propagation highlight
+if(wfc.propagated.has(i)&&!cell.collapsed){
+ctx.strokeStyle='rgba(0,206,201,0.4)';
+ctx.lineWidth=1;
+ctx.strokeRect(x+1,y+1,cellSize-2,cellSize-2);
+}
+}
+// Contradiction
+if(wfc.contradiction&&wfc.contradictionCell!=null){
+const ci=wfc.contradictionCell;
+const cx=(ci%gs)*cellSize,cy=Math.floor(ci/gs)*cellSize;
+ctx.fillStyle=`rgba(255,71,87,${0.5+0.3*Math.sin(animFrame*0.2)})`;
+ctx.fillRect(cx,cy,cellSize,cellSize);
+ctx.strokeStyle='#ff4757';ctx.lineWidth=2;
+ctx.strokeRect(cx,cy,cellSize,cellSize);
+}
+// Grid lines
+ctx.strokeStyle='rgba(255,255,255,0.04)';ctx.lineWidth=0.5;
+for(let gx=0;gx<=gs;gx++){ctx.beginPath();ctx.moveTo(gx*cellSize,0);ctx.lineTo(gx*cellSize,gs*cellSize);ctx.stroke()}
+for(let gy=0;gy<=gs;gy++){ctx.beginPath();ctx.moveTo(0,gy*cellSize);ctx.lineTo(gs*cellSize,gy*cellSize);ctx.stroke()}
+
+statsText.textContent=`${wfc.collapsed}/${gs*gs} collapsed`;
+if(wfc.done)statusText.textContent='✓ Complete';
+else if(wfc.contradiction)statusText.textContent='✗ Contradiction — click New to restart';
+}
+
+let animId=null;
+function loop(){
+animFrame++;
+if(playing&&wfc&&!wfc.done&&!wfc.contradiction){
+const spd=parseInt(speedSlider.value);
+for(let i=0;i<spd;i++){
+if(!wfc.step())break;
+}
+}
+draw();
+animId=requestAnimationFrame(loop);
+}
+
+// Events
+gridSlider.oninput=()=>{gridVal.textContent=gridSlider.value;restart()};
+speedSlider.oninput=()=>{speedVal.textContent=speedSlider.value};
+tilesetSel.onchange=()=>restart();
+playBtn.onclick=()=>{
+playing=!playing;
+playBtn.textContent=playing?'⏸ Pause':'▶ Play';
+playBtn.classList.toggle('active',playing);
+};
+stepBtn.onclick=()=>{if(wfc&&!wfc.done&&!wfc.contradiction)wfc.step()};
+newBtn.onclick=()=>{playing=false;playBtn.textContent='▶ Play';playBtn.classList.remove('active');restart()};
+heatBtn.onclick=()=>{showHeat=!showHeat;heatBtn.classList.toggle('active',showHeat)};
+
+// Click to force-collapse
+function cellFromEvent(e){
+const rect=cv.getBoundingClientRect();
+const sx=cv.width/rect.width,sy=cv.height/rect.height;
+const mx=(e.clientX-rect.left)*sx,my=(e.clientY-rect.top)*sy;
+const gx=Math.floor(mx/cellSize),gy=Math.floor(my/cellSize);
+if(!wfc||gx<0||gy<0||gx>=wfc.w||gy>=wfc.h)return-1;
+return gy*wfc.w+gx;
+}
+
+cv.addEventListener('click',e=>{
+const idx=cellFromEvent(e);
+if(idx<0||!wfc)return;
+const cell=wfc.grid[idx];
+if(cell.collapsed)return;
+if(cell.options.size<=1)return;
+// Show tile picker
+tileMenu.innerHTML='';
+tileMenu.style.display='flex';
+tileMenu.style.left=e.clientX+'px';
+tileMenu.style.top=e.clientY+'px';
+tileMenuCell=idx;
+for(const ti of cell.options){
+const tc=document.createElement('canvas');
+tc.width=40;tc.height=40;
+const tctx=tc.getContext('2d');
+tiles[ti].draw(tctx,0,0,40);
+tc.title=tiles[ti].name;
+tc.onclick=()=>{
+wfc.collapseToTile(idx,ti);
+wfc.propagate(idx);
+tileMenu.style.display='none';
+};
+tileMenu.appendChild(tc);
+}
+});
+
+// Touch support
+cv.addEventListener('touchend',e=>{
+e.preventDefault();
+const t=e.changedTouches[0];
+cv.dispatchEvent(new MouseEvent('click',{clientX:t.clientX,clientY:t.clientY}));
+},{passive:false});
+
+document.addEventListener('click',e=>{
+if(!tileMenu.contains(e.target)&&e.target!==cv)tileMenu.style.display='none';
+});
+
+window.addEventListener('resize',()=>{if(wfc){resize();draw()}});
+
+// Init
+restart();
+loop();
+</script>
+</body>
+</html>
