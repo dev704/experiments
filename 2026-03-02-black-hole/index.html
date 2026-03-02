@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Black Hole Gravitational Lensing</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; color: #ccc; }
+canvas { display: block; width: 100vw; height: 100vh; }
+#controls {
+  position: fixed; top: 10px; right: 10px; background: rgba(0,0,0,0.85);
+  border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;
+  padding: 12px 16px; min-width: 220px; backdrop-filter: blur(8px);
+  transition: max-height 0.3s ease; z-index: 10;
+}
+#controls.collapsed .body { display: none; }
+#controls h2 { font-size: 13px; cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; }
+#controls h2::after { content: '▾'; font-size: 10px; }
+#controls.collapsed h2::after { content: '▸'; }
+.body { margin-top: 10px; }
+label { display: block; font-size: 11px; margin-top: 8px; opacity: 0.7; }
+input[type=range] { width: 100%; margin: 4px 0; accent-color: #f80; }
+.row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.row label { margin: 0; flex: 1; }
+.toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle span { position: absolute; inset: 0; background: #333; border-radius: 10px; cursor: pointer; transition: 0.2s; }
+.toggle span::before { content: ''; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #888; border-radius: 50%; transition: 0.2s; }
+.toggle input:checked + span { background: #f80; }
+.toggle input:checked + span::before { transform: translateX(16px); background: #fff; }
+select { width: 100%; background: #222; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 4px; font-size: 11px; margin-top: 4px; }
+#info { position: fixed; bottom: 10px; left: 10px; font-size: 11px; opacity: 0.4; z-index: 10; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="controls">
+  <h2 onclick="this.parentElement.classList.toggle('collapsed')">⚫ Black Hole Controls</h2>
+  <div class="body">
+    <label>Mass (Schwarzschild radius)</label>
+    <input type="range" id="mass" min="0.02" max="0.3" step="0.005" value="0.1">
+    <label>Spin rate</label>
+    <input type="range" id="spin" min="0" max="3" step="0.05" value="0.8">
+    <label>Disk brightness</label>
+    <input type="range" id="brightness" min="0" max="3" step="0.1" value="1.5">
+    <div class="row">
+      <label>Accretion disk</label>
+      <label class="toggle"><input type="checkbox" id="disk" checked><span></span></label>
+    </div>
+    <label>Colour theme</label>
+    <select id="theme">
+      <option value="0">Realistic</option>
+      <option value="1">False-colour scientific</option>
+      <option value="2" selected>Interstellar warm</option>
+      <option value="3">Cool blue</option>
+    </select>
+  </div>
+</div>
+<div id="info">Drag to move · Scroll to adjust mass</div>
+
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+if (!gl) { document.body.innerHTML = '<p style="color:#fff;padding:20px">WebGL 2 not supported</p>'; throw 'no webgl2'; }
+
+// State
+let bhX = 0, bhY = 0, dragging = false, lastX, lastY;
+const mass = document.getElementById('mass');
+const spin = document.getElementById('spin');
+const brightness = document.getElementById('brightness');
+const diskToggle = document.getElementById('disk');
+const themeSelect = document.getElementById('theme');
+
+// Vertex shader
+const vs = `#version 300 es
+in vec2 p;
+void main(){ gl_Position=vec4(p,0,1); }`;
+
+// Fragment shader
+const fs = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform vec2 uBH;
+uniform float uRs;
+uniform float uTime;
+uniform float uSpin;
+uniform float uBrightness;
+uniform int uDisk;
+uniform int uTheme;
+out vec4 fragColor;
+
+#define PI 3.14159265359
+#define TAU 6.28318530718
+
+// Hash for starfield
+float hash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+float hash3(vec3 p) {
+    p = fract(p * vec3(123.34, 456.21, 789.53));
+    p += dot(p, p.yxz + 45.32);
+    return fract(p.x * p.y * p.z);
+}
+
+// Starfield on a sphere
+vec3 starfield(vec2 dir) {
+    vec3 col = vec3(0.0);
+    // Multiple layers for depth
+    for(int layer = 0; layer < 3; layer++) {
+        float scale = 80.0 + float(layer) * 120.0;
+        vec2 grid = floor(dir * scale);
+        vec2 f = fract(dir * scale);
+        float h = hash(grid + float(layer) * 100.0);
+        if(h > 0.97) {
+            vec2 starPos = vec2(hash(grid * 1.1 + float(layer)), hash(grid * 2.3 + float(layer)));
+            float d = length(f - starPos);
+            float bright = smoothstep(0.05, 0.0, d) * (0.5 + 0.5 * hash(grid * 3.7));
+            // Star colour temperature
+            float temp = hash(grid * 5.1 + float(layer));
+            vec3 starCol;
+            if(temp < 0.3) starCol = vec3(0.8, 0.85, 1.0); // blue-white
+            else if(temp < 0.7) starCol = vec3(1.0, 0.98, 0.9); // white-yellow
+            else starCol = vec3(1.0, 0.7, 0.4); // orange
+            col += starCol * bright * (1.0 + float(layer) * 0.3);
+        }
+    }
+    // Faint nebula background
+    float n = hash(floor(dir * 10.0)) * 0.02;
+    col += vec3(0.05, 0.02, 0.08) * n;
+    return col;
+}
+
+// Blackbody approximation for accretion disk
+vec3 blackbody(float t) {
+    // t in [0,1] mapped to temperature range
+    vec3 c;
+    c.r = smoothstep(0.0, 0.4, t);
+    c.g = smoothstep(0.2, 0.7, t) * (1.0 - 0.3 * smoothstep(0.8, 1.0, t));
+    c.b = smoothstep(0.5, 1.0, t);
+    return c;
+}
+
+// Theme colour grading
+vec3 applyTheme(vec3 col, vec3 diskCol, float isDisk) {
+    if(uTheme == 1) {
+        // False-colour scientific
+        col = vec3(
+            dot(col, vec3(0.2, 0.7, 0.1)),
+            dot(col, vec3(0.1, 0.3, 0.6)),
+            dot(col, vec3(0.6, 0.2, 0.2))
+        );
+        diskCol = vec3(diskCol.g, diskCol.b * 0.8 + diskCol.r * 0.3, diskCol.r);
+    } else if(uTheme == 2) {
+        // Interstellar warm
+        col *= vec3(1.1, 0.95, 0.8);
+        diskCol = mix(diskCol, diskCol * vec3(1.3, 0.9, 0.5), 0.5);
+    } else if(uTheme == 3) {
+        // Cool blue
+        col = col * vec3(0.6, 0.8, 1.2) + vec3(0.0, 0.0, 0.02);
+        diskCol = mix(diskCol, vec3(diskCol.b, diskCol.g * 0.8, diskCol.r * 0.5 + diskCol.b * 0.5), 0.6);
+    }
+    return mix(col, diskCol, isDisk);
+}
+
+void main() {
+    vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / min(uRes.x, uRes.y);
+    vec2 bh = uBH;
+    
+    vec2 diff = uv - bh;
+    float r = length(diff);
+    float rs = uRs; // Schwarzschild radius
+    float photonR = 1.5 * rs; // Photon sphere
+    float iscoR = 3.0 * rs; // Innermost stable circular orbit
+    
+    // Event horizon - pure black
+    if(r < rs * 0.98) {
+        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    
+    // Ray deflection angle - strong field approximation
+    // Using logarithmic divergence near photon sphere
+    float b = r; // impact parameter
+    float deflection;
+    
+    if(b < photonR * 1.01) {
+        // Very strong lensing near photon sphere
+        deflection = PI * 2.0;
+    } else {
+        // Approximate strong-field deflection
+        float u = rs / b;
+        // Weak field: 2*u, add higher order terms
+        deflection = 2.0 * u + 15.0 * PI / 16.0 * u * u + 
+                     401.0 / 64.0 * u * u * u;
+        // Enhance near photon sphere
+        float photonProx = photonR / (b - photonR + 0.001);
+        deflection += 0.5 * photonProx * photonProx * u;
+    }
+    
+    // Deflect the ray direction
+    vec2 dir = normalize(diff);
+    float angle = atan(diff.y, diff.x);
+    
+    // The lensed position on the background sky
+    vec2 lensedUV = bh + dir * (r + deflection * rs);
+    
+    // Convert to spherical-ish coordinates for starfield sampling
+    vec2 skyCoord = lensedUV * 3.0;
+    
+    // Sample starfield at deflected position
+    vec3 col = starfield(skyCoord);
+    
+    // Gravitational redshift: z = 1/sqrt(1 - rs/r) - 1
+    float redshiftFactor = 1.0;
+    if(r < rs * 5.0) {
+        float zFactor = sqrt(max(0.0, 1.0 - rs / r));
+        redshiftFactor = zFactor;
+        // Shift star colours toward red near horizon
+        col.b *= zFactor;
+        col.g *= sqrt(zFactor);
+    }
+    
+    // Secondary image (light going around the other side)
+    if(r < photonR * 3.0 && r > rs) {
+        vec2 oppositeUV = bh - dir * (r + deflection * rs * 2.0);
+        vec3 secondaryStars = starfield(oppositeUV * 3.0) * 0.5;
+        float secondaryWeight = smoothstep(photonR * 3.0, photonR, r);
+        col += secondaryStars * secondaryWeight * redshiftFactor;
+    }
+    
+    // Einstein ring - brightening at the photon sphere
+    float einsteinRing = exp(-pow((r - photonR) / (rs * 0.15), 2.0));
+    col += vec3(0.4, 0.35, 0.3) * einsteinRing * 2.0;
+    
+    // Photon sphere glow
+    float photonGlow = exp(-pow((r - photonR) / (rs * 0.08), 2.0));
+    col += vec3(0.6, 0.5, 0.4) * photonGlow * 0.5;
+    
+    // Accretion disk
+    float isDisk = 0.0;
+    vec3 diskCol = vec3(0.0);
+    if(uDisk == 1 && r > rs * 1.2) {
+        // Disk in equatorial plane - use y-offset from black hole center
+        float diskY = abs(diff.y);
+        float diskThickness = rs * 0.15 * (1.0 + r / (iscoR * 2.0));
+        float inDisk = smoothstep(diskThickness, diskThickness * 0.3, diskY);
+        
+        if(inDisk > 0.01 && r > iscoR * 0.8 && r < rs * 15.0) {
+            // Temperature profile T ∝ r^(-3/4)
+            float temp = pow(iscoR / r, 0.75);
+            
+            // Orbital velocity for Doppler shift
+            float orbitalV = sqrt(rs / (2.0 * r)); // Newtonian approx
+            
+            // Doppler factor: approaching on left, receding on right
+            float cosAngle = diff.x / r;
+            float doppler = 1.0 / (1.0 - orbitalV * cosAngle * uSpin);
+            doppler = clamp(doppler, 0.3, 3.0);
+            
+            // Boosted temperature
+            float boostedTemp = temp * doppler;
+            
+            // Disk colour from temperature
+            vec3 hotCol = vec3(1.0, 0.85, 0.6); // Hot inner
+            vec3 coolCol = vec3(0.8, 0.2, 0.05); // Cool outer
+            diskCol = mix(coolCol, hotCol, clamp(boostedTemp, 0.0, 1.0));
+            
+            // Doppler colour shift
+            if(doppler > 1.0) {
+                diskCol = mix(diskCol, vec3(0.5, 0.7, 1.0), (doppler - 1.0) * 0.4); // Blueshift
+            } else {
+                diskCol = mix(diskCol, vec3(1.0, 0.2, 0.0), (1.0 - doppler) * 0.5); // Redshift
+            }
+            
+            // Intensity: Doppler boosting ∝ doppler^3
+            float intensity = pow(doppler, 3.0) * temp * uBrightness;
+            
+            // Turbulence / texture
+            float turb = 0.7 + 0.3 * sin(angle * 8.0 + uTime * uSpin * 2.0 + r * 20.0);
+            turb *= 0.8 + 0.2 * sin(r * 50.0 - uTime * uSpin);
+            
+            diskCol *= intensity * turb * inDisk;
+            
+            // Gravitational redshift on disk emission
+            diskCol *= redshiftFactor;
+            
+            isDisk = inDisk * clamp(intensity, 0.0, 1.0);
+            
+            // Glow/bloom on disk
+            diskCol += diskCol * 0.3;
+        }
+        
+        // Lensed back-side of disk (light from behind BH)
+        if(r < photonR * 2.5 && r > rs) {
+            float backDiskR = rs * 6.0 - r; // Mirror approximate
+            if(backDiskR > iscoR && backDiskR < rs * 12.0) {
+                float backTemp = pow(iscoR / backDiskR, 0.75);
+                float backIntensity = backTemp * 0.4 * uBrightness;
+                float backRing = exp(-pow((r - photonR * 1.3) / (rs * 0.3), 2.0));
+                vec3 backCol = mix(vec3(0.8, 0.2, 0.05), vec3(1.0, 0.85, 0.6), backTemp) * backIntensity * backRing;
+                diskCol += backCol;
+                isDisk = max(isDisk, backRing * 0.5);
+            }
+        }
+    }
+    
+    // Apply theme
+    vec3 finalCol = applyTheme(col, diskCol, isDisk);
+    
+    // Edge darkening near event horizon
+    float horizonFade = smoothstep(rs * 0.98, rs * 1.3, r);
+    finalCol *= horizonFade;
+    
+    // Subtle vignette
+    float vignette = 1.0 - 0.3 * length(uv) * length(uv);
+    finalCol *= vignette;
+    
+    // Tone mapping
+    finalCol = finalCol / (1.0 + finalCol); // Reinhard
+    finalCol = pow(finalCol, vec3(0.9)); // Slight gamma
+    
+    fragColor = vec4(finalCol, 1.0);
+}`;
+
+function createShader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(s));
+        return null;
+    }
+    return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, createShader(gl.VERTEX_SHADER, vs));
+gl.attachShader(prog, createShader(gl.FRAGMENT_SHADER, fs));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+// Fullscreen quad
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+const pLoc = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(pLoc);
+gl.vertexAttribPointer(pLoc, 2, gl.FLOAT, false, 0, 0);
+
+// Uniforms
+const uRes = gl.getUniformLocation(prog, 'uRes');
+const uBH = gl.getUniformLocation(prog, 'uBH');
+const uRs = gl.getUniformLocation(prog, 'uRs');
+const uTime = gl.getUniformLocation(prog, 'uTime');
+const uSpin = gl.getUniformLocation(prog, 'uSpin');
+const uBrightness = gl.getUniformLocation(prog, 'uBrightness');
+const uDisk = gl.getUniformLocation(prog, 'uDisk');
+const uTheme = gl.getUniformLocation(prog, 'uTheme');
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// Mouse/touch controls
+function getPos(e) {
+    const t = e.touches ? e.touches[0] : e;
+    const s = Math.min(canvas.width, canvas.height);
+    return [(t.clientX - canvas.width/2) / s, -(t.clientY - canvas.height/2) / s];
+}
+
+canvas.addEventListener('mousedown', e => { dragging = true; [lastX, lastY] = getPos(e); });
+canvas.addEventListener('touchstart', e => { e.preventDefault(); dragging = true; [lastX, lastY] = getPos(e); }, {passive:false});
+
+window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const [x, y] = getPos(e);
+    bhX += x - lastX; bhY += y - lastY;
+    lastX = x; lastY = y;
+});
+window.addEventListener('touchmove', e => {
+    if (!dragging) return;
+    e.preventDefault();
+    const [x, y] = getPos(e);
+    bhX += x - lastX; bhY += y - lastY;
+    lastX = x; lastY = y;
+}, {passive:false});
+
+window.addEventListener('mouseup', () => dragging = false);
+window.addEventListener('touchend', () => dragging = false);
+
+canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    mass.value = Math.max(0.02, Math.min(0.3, parseFloat(mass.value) + e.deltaY * 0.0005));
+}, {passive:false});
+
+// Render loop
+const t0 = performance.now();
+function frame() {
+    const t = (performance.now() - t0) / 1000;
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform2f(uBH, bhX, bhY);
+    gl.uniform1f(uRs, parseFloat(mass.value));
+    gl.uniform1f(uTime, t);
+    gl.uniform1f(uSpin, parseFloat(spin.value));
+    gl.uniform1f(uBrightness, parseFloat(brightness.value));
+    gl.uniform1i(uDisk, diskToggle.checked ? 1 : 0);
+    gl.uniform1i(uTheme, parseInt(themeSelect.value));
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>
