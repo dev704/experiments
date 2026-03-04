@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Procedural Terrain with Hydraulic Erosion</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; color: #c8cad0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; overflow: hidden; display: flex; height: 100vh; }
+
+  #controls {
+    width: 300px; min-width: 300px; background: #12131a; border-right: 1px solid #2a2d3a;
+    overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    scrollbar-width: thin; scrollbar-color: #3a3d4a #12131a;
+    z-index: 10;
+  }
+  #controls::-webkit-scrollbar { width: 6px; }
+  #controls::-webkit-scrollbar-track { background: #12131a; }
+  #controls::-webkit-scrollbar-thumb { background: #3a3d4a; border-radius: 3px; }
+
+  #canvas-container { flex: 1; position: relative; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  h1 { font-size: 18px; color: #e0e2ea; margin-bottom: 4px; letter-spacing: 0.5px; }
+  .subtitle { font-size: 11px; color: #6a6d7a; margin-bottom: 8px; }
+
+  .section { background: #1a1b24; border-radius: 8px; padding: 12px; }
+  .section-title { font-size: 12px; font-weight: 600; color: #8a8d9a; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+
+  .control-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .control-row label { font-size: 12px; color: #9a9daa; }
+  .control-row .value { font-size: 11px; color: #6a9fff; min-width: 40px; text-align: right; }
+
+  input[type="range"] {
+    -webkit-appearance: none; width: 100%; height: 4px; background: #2a2d3a; border-radius: 2px; outline: none; margin: 4px 0;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px; background: #6a9fff; border-radius: 50%; cursor: pointer;
+    box-shadow: 0 0 6px rgba(106,159,255,0.4);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 14px; height: 14px; background: #6a9fff; border-radius: 50%; cursor: pointer; border: none;
+  }
+
+  button {
+    width: 100%; padding: 10px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: all 0.2s; letter-spacing: 0.3px;
+  }
+  .btn-primary { background: #4a7fff; color: #fff; }
+  .btn-primary:hover { background: #5a8fff; box-shadow: 0 2px 12px rgba(74,127,255,0.3); }
+  .btn-secondary { background: #2a2d3a; color: #c8cad0; }
+  .btn-secondary:hover { background: #3a3d4a; }
+  .btn-accent { background: #3a6a4a; color: #c8ffd8; }
+  .btn-accent:hover { background: #4a7a5a; }
+  .btn-export { background: #5a3a6a; color: #e8c8ff; }
+  .btn-export:hover { background: #6a4a7a; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-row { display: flex; gap: 8px; }
+  .btn-row button { flex: 1; }
+
+  select {
+    width: 100%; padding: 8px; background: #2a2d3a; color: #c8cad0; border: 1px solid #3a3d4a;
+    border-radius: 6px; font-size: 12px; outline: none; cursor: pointer;
+  }
+  select:focus { border-color: #6a9fff; }
+
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .checkbox-row input[type="checkbox"] { accent-color: #6a9fff; }
+  .checkbox-row label { font-size: 12px; color: #9a9daa; cursor: pointer; }
+
+  #status {
+    font-size: 11px; color: #6a9fff; padding: 8px 12px; background: #1a1b24; border-radius: 6px;
+    min-height: 20px; line-height: 1.4;
+  }
+
+  #fps {
+    position: absolute; top: 12px; right: 12px; font-size: 12px; color: #4a7fff;
+    background: rgba(18,19,26,0.85); padding: 4px 10px; border-radius: 4px;
+    font-family: 'Courier New', monospace; z-index: 5; pointer-events: none;
+  }
+
+  @media (max-width: 768px) {
+    body { flex-direction: column; }
+    #controls { width: 100%; min-width: unset; max-height: 40vh; border-right: none; border-bottom: 1px solid #2a2d3a; }
+    #canvas-container { flex: 1; min-height: 300px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <h1>⛰️ Terrain Erosion</h1>
+  <div class="subtitle">Procedural generation with hydraulic erosion</div>
+
+  <div class="section">
+    <div class="section-title">Terrain Generation</div>
+    <div class="control-row"><label>Octaves</label><span class="value" id="v-octaves">6</span></div>
+    <input type="range" id="octaves" min="1" max="10" value="6" step="1">
+    <div class="control-row"><label>Persistence</label><span class="value" id="v-persistence">0.50</span></div>
+    <input type="range" id="persistence" min="0.1" max="0.9" value="0.5" step="0.01">
+    <div class="control-row"><label>Lacunarity</label><span class="value" id="v-lacunarity">2.00</span></div>
+    <input type="range" id="lacunarity" min="1.0" max="4.0" value="2.0" step="0.05">
+    <div class="control-row"><label>Scale</label><span class="value" id="v-scale">4.0</span></div>
+    <input type="range" id="scale" min="1.0" max="12.0" value="4.0" step="0.1">
+    <button class="btn-primary" id="btn-generate">🌍 Generate Terrain</button>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Hydraulic Erosion</div>
+    <div class="control-row"><label>Drop Count</label><span class="value" id="v-drops">50000</span></div>
+    <input type="range" id="drops" min="1000" max="200000" value="50000" step="1000">
+    <div class="btn-row">
+      <button class="btn-accent" id="btn-erode">💧 Erode</button>
+      <button class="btn-secondary" id="btn-step">Step 1k</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Appearance</div>
+    <div class="control-row"><label>Colour Scheme</label></div>
+    <select id="colorScheme">
+      <option value="earth">🌍 Earth Tones</option>
+      <option value="desert">🏜️ Desert</option>
+      <option value="arctic">❄️ Arctic</option>
+      <option value="alien">👽 Alien</option>
+    </select>
+    <div class="control-row" style="margin-top:10px"><label>Water Level</label><span class="value" id="v-water">0.20</span></div>
+    <input type="range" id="waterLevel" min="0" max="0.6" value="0.2" step="0.01">
+    <div class="control-row"><label>Sun Angle</label><span class="value" id="v-sun">45°</span></div>
+    <input type="range" id="sunAngle" min="0" max="360" value="45" step="1">
+    <div class="control-row"><label>Sun Elevation</label><span class="value" id="v-sunElev">40°</span></div>
+    <input type="range" id="sunElevation" min="5" max="85" value="40" step="1">
+    <div class="checkbox-row">
+      <input type="checkbox" id="wireframe"><label for="wireframe">Wireframe</label>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="shadows" checked><label for="shadows">Shadows</label>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Export</div>
+    <button class="btn-export" id="btn-export">📥 Export Heightmap (PNG)</button>
+  </div>
+
+  <div id="status">Ready. Click Generate to begin.</div>
+</div>
+
+<div id="canvas-container">
+  <div id="fps">-- FPS</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ============================================================
+// Simplex Noise (2D) — self-contained implementation
+// ============================================================
+const SimplexNoise = (() => {
+  const F2 = 0.5 * (Math.sqrt(3) - 1);
+  const G2 = (3 - Math.sqrt(3)) / 6;
+  const g3 = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+
+  class Simplex {
+    constructor(seed) {
+      this.perm = new Uint8Array(512);
+      this.permMod8 = new Uint8Array(512);
+      const p = new Uint8Array(256);
+      for (let i = 0; i < 256; i++) p[i] = i;
+      // Seed-based shuffle
+      let s = seed | 0;
+      for (let i = 255; i > 0; i--) {
+        s = (s * 16807 + 0) & 0x7fffffff;
+        const j = s % (i + 1);
+        [p[i], p[j]] = [p[j], p[i]];
+      }
+      for (let i = 0; i < 512; i++) {
+        this.perm[i] = p[i & 255];
+        this.permMod8[i] = this.perm[i] & 7;
+      }
+    }
+
+    noise2D(x, y) {
+      const s = (x + y) * F2;
+      const i = Math.floor(x + s);
+      const j = Math.floor(y + s);
+      const t = (i + j) * G2;
+      const X0 = i - t, Y0 = j - t;
+      const x0 = x - X0, y0 = y - Y0;
+      const i1 = x0 > y0 ? 1 : 0;
+      const j1 = x0 > y0 ? 0 : 1;
+      const x1 = x0 - i1 + G2;
+      const y1 = y0 - j1 + G2;
+      const x2 = x0 - 1 + 2 * G2;
+      const y2 = y0 - 1 + 2 * G2;
+      const ii = i & 255, jj = j & 255;
+
+      let n0 = 0, n1 = 0, n2 = 0;
+      let t0 = 0.5 - x0*x0 - y0*y0;
+      if (t0 > 0) { t0 *= t0; const gi = this.permMod8[ii + this.perm[jj]]; n0 = t0*t0*(g3[gi][0]*x0 + g3[gi][1]*y0); }
+      let t1 = 0.5 - x1*x1 - y1*y1;
+      if (t1 > 0) { t1 *= t1; const gi = this.permMod8[ii+i1+this.perm[jj+j1]]; n1 = t1*t1*(g3[gi][0]*x1 + g3[gi][1]*y1); }
+      let t2 = 0.5 - x2*x2 - y2*y2;
+      if (t2 > 0) { t2 *= t2; const gi = this.permMod8[ii+1+this.perm[jj+1]]; n2 = t2*t2*(g3[gi][0]*x2 + g3[gi][1]*y2); }
+      return 70 * (n0 + n1 + n2);
+    }
+  }
+  return Simplex;
+})();
+
+// ============================================================
+// Config
+// ============================================================
+const SIZE = 256;
+let heightmap = new Float32Array(SIZE * SIZE);
+let seed = Math.random() * 100000 | 0;
+
+// ============================================================
+// Terrain Generation (FBM)
+// ============================================================
+function generateTerrain() {
+  const octaves = +document.getElementById('octaves').value;
+  const persistence = +document.getElementById('persistence').value;
+  const lacunarity = +document.getElementById('lacunarity').value;
+  const scale = +document.getElementById('scale').value;
+
+  seed = Math.random() * 100000 | 0;
+  const simplex = new SimplexNoise(seed);
+
+  let min = Infinity, max = -Infinity;
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      let amp = 1, freq = 1, val = 0;
+      for (let o = 0; o < octaves; o++) {
+        val += amp * simplex.noise2D(x / SIZE * scale * freq, y / SIZE * scale * freq);
+        amp *= persistence;
+        freq *= lacunarity;
+      }
+      heightmap[y * SIZE + x] = val;
+      if (val < min) min = val;
+      if (val > max) max = val;
+    }
+  }
+  // Normalize to 0..1
+  const range = max - min || 1;
+  for (let i = 0; i < heightmap.length; i++) {
+    heightmap[i] = (heightmap[i] - min) / range;
+  }
+  // Apply power curve for more interesting terrain
+  for (let i = 0; i < heightmap.length; i++) {
+    heightmap[i] = Math.pow(heightmap[i], 1.3);
+  }
+}
+
+// ============================================================
+// Hydraulic Erosion
+// ============================================================
+function getHeight(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  if (ix < 0 || ix >= SIZE-1 || iy < 0 || iy >= SIZE-1) return 0;
+  const fx = x - ix, fy = y - iy;
+  const h00 = heightmap[iy * SIZE + ix];
+  const h10 = heightmap[iy * SIZE + ix + 1];
+  const h01 = heightmap[(iy+1) * SIZE + ix];
+  const h11 = heightmap[(iy+1) * SIZE + ix + 1];
+  return h00*(1-fx)*(1-fy) + h10*fx*(1-fy) + h01*(1-fx)*fy + h11*fx*fy;
+}
+
+function getGradient(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  if (ix < 0 || ix >= SIZE-1 || iy < 0 || iy >= SIZE-1) return [0, 0];
+  const fx = x - ix, fy = y - iy;
+  const h00 = heightmap[iy * SIZE + ix];
+  const h10 = heightmap[iy * SIZE + ix + 1];
+  const h01 = heightmap[(iy+1) * SIZE + ix];
+  const h11 = heightmap[(iy+1) * SIZE + ix + 1];
+  const gx = (h10 - h00)*(1-fy) + (h11 - h01)*fy;
+  const gy = (h01 - h00)*(1-fx) + (h11 - h10)*fx;
+  return [gx, gy];
+}
+
+function deposit(x, y, amount) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  if (ix < 0 || ix >= SIZE-1 || iy < 0 || iy >= SIZE-1) return;
+  const fx = x - ix, fy = y - iy;
+  heightmap[iy * SIZE + ix]       += amount * (1-fx) * (1-fy);
+  heightmap[iy * SIZE + ix + 1]   += amount * fx * (1-fy);
+  heightmap[(iy+1) * SIZE + ix]   += amount * (1-fx) * fy;
+  heightmap[(iy+1) * SIZE + ix+1] += amount * fx * fy;
+}
+
+function erode(numDrops, onProgress) {
+  const inertia = 0.05;
+  const capacity = 4.0;
+  const deposition = 0.3;
+  const erosion = 0.3;
+  const evaporation = 0.01;
+  const minSlope = 0.01;
+  const gravity = 4.0;
+  const maxSteps = 80;
+  const erosionRadius = 3;
+
+  for (let d = 0; d < numDrops; d++) {
+    let px = Math.random() * (SIZE - 2) + 1;
+    let py = Math.random() * (SIZE - 2) + 1;
+    let dx = 0, dy = 0;
+    let speed = 1;
+    let water = 1;
+    let sediment = 0;
+
+    for (let step = 0; step < maxSteps; step++) {
+      const [gx, gy] = getGradient(px, py);
+      const oldH = getHeight(px, py);
+
+      // Update direction with inertia
+      dx = dx * inertia - gx * (1 - inertia);
+      dy = dy * inertia - gy * (1 - inertia);
+
+      const len = Math.sqrt(dx*dx + dy*dy);
+      if (len < 1e-8) break;
+      dx /= len; dy /= len;
+
+      const nx = px + dx;
+      const ny = py + dy;
+      if (nx < 1 || nx >= SIZE-2 || ny < 1 || ny >= SIZE-2) break;
+
+      const newH = getHeight(nx, ny);
+      const heightDiff = newH - oldH;
+
+      if (heightDiff > 0) {
+        // Going uphill: deposit sediment
+        const dep = Math.min(sediment, heightDiff);
+        deposit(px, py, dep);
+        sediment -= dep;
+      } else {
+        // Going downhill
+        const cap = Math.max(-heightDiff, minSlope) * speed * water * capacity;
+
+        if (sediment > cap) {
+          // Deposit excess
+          const dep = (sediment - cap) * deposition;
+          deposit(px, py, dep);
+          sediment -= dep;
+        } else {
+          // Erode
+          const amount = Math.min((cap - sediment) * erosion, -heightDiff);
+
+          // Erode with radius for smoother results
+          const ix = Math.floor(px), iy = Math.floor(py);
+          let totalWeight = 0;
+          const weights = [];
+          for (let ey = -erosionRadius; ey <= erosionRadius; ey++) {
+            for (let ex = -erosionRadius; ex <= erosionRadius; ex++) {
+              const cx = ix + ex, cy = iy + ey;
+              if (cx < 0 || cx >= SIZE || cy < 0 || cy >= SIZE) continue;
+              const dist = Math.sqrt((px - cx)*(px - cx) + (py - cy)*(py - cy));
+              if (dist > erosionRadius) continue;
+              const w = Math.max(0, erosionRadius - dist);
+              totalWeight += w;
+              weights.push({ cx, cy, w });
+            }
+          }
+          if (totalWeight > 0) {
+            for (const { cx, cy, w } of weights) {
+              const erodeAmt = amount * w / totalWeight;
+              heightmap[cy * SIZE + cx] -= erodeAmt;
+            }
+          }
+          sediment += amount;
+        }
+      }
+
+      speed = Math.sqrt(Math.max(0, speed * speed + heightDiff * gravity));
+      water *= (1 - evaporation);
+      px = nx; py = ny;
+
+      if (water < 0.001) break;
+    }
+  }
+}
+
+// ============================================================
+// Colour Schemes
+// ============================================================
+const colorSchemes = {
+  earth: [
+    { h: 0.0,  c: [0.05, 0.15, 0.40] }, // deep water
+    { h: 0.15, c: [0.10, 0.30, 0.55] }, // shallow water
+    { h: 0.20, c: [0.76, 0.70, 0.50] }, // beach
+    { h: 0.25, c: [0.24, 0.50, 0.15] }, // grass
+    { h: 0.45, c: [0.13, 0.38, 0.10] }, // dark grass
+    { h: 0.60, c: [0.40, 0.35, 0.25] }, // rock
+    { h: 0.80, c: [0.55, 0.50, 0.45] }, // light rock
+    { h: 0.90, c: [0.85, 0.85, 0.85] }, // snow transition
+    { h: 1.0,  c: [0.98, 0.98, 1.00] }, // snow
+  ],
+  desert: [
+    { h: 0.0,  c: [0.10, 0.08, 0.05] },
+    { h: 0.15, c: [0.40, 0.25, 0.10] },
+    { h: 0.20, c: [0.76, 0.60, 0.35] },
+    { h: 0.30, c: [0.85, 0.70, 0.40] },
+    { h: 0.50, c: [0.80, 0.65, 0.38] },
+    { h: 0.70, c: [0.65, 0.45, 0.25] },
+    { h: 0.85, c: [0.55, 0.35, 0.20] },
+    { h: 0.95, c: [0.90, 0.80, 0.65] },
+    { h: 1.0,  c: [0.95, 0.90, 0.80] },
+  ],
+  arctic: [
+    { h: 0.0,  c: [0.05, 0.10, 0.25] },
+    { h: 0.15, c: [0.15, 0.25, 0.45] },
+    { h: 0.20, c: [0.60, 0.65, 0.70] },
+    { h: 0.25, c: [0.75, 0.80, 0.85] },
+    { h: 0.40, c: [0.80, 0.85, 0.90] },
+    { h: 0.55, c: [0.70, 0.75, 0.82] },
+    { h: 0.70, c: [0.85, 0.88, 0.92] },
+    { h: 0.85, c: [0.92, 0.94, 0.97] },
+    { h: 1.0,  c: [1.00, 1.00, 1.00] },
+  ],
+  alien: [
+    { h: 0.0,  c: [0.05, 0.00, 0.15] },
+    { h: 0.15, c: [0.20, 0.00, 0.35] },
+    { h: 0.20, c: [0.30, 0.60, 0.20] },
+    { h: 0.30, c: [0.10, 0.50, 0.30] },
+    { h: 0.45, c: [0.60, 0.20, 0.50] },
+    { h: 0.60, c: [0.80, 0.30, 0.10] },
+    { h: 0.75, c: [0.90, 0.50, 0.00] },
+    { h: 0.90, c: [1.00, 0.80, 0.20] },
+    { h: 1.0,  c: [1.00, 1.00, 0.60] },
+  ]
+};
+
+function getColor(h, scheme) {
+  const stops = colorSchemes[scheme];
+  if (h <= stops[0].h) return stops[0].c;
+  if (h >= stops[stops.length-1].h) return stops[stops.length-1].c;
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (h >= stops[i].h && h <= stops[i+1].h) {
+      const t = (h - stops[i].h) / (stops[i+1].h - stops[i].h);
+      return [
+        stops[i].c[0] + t * (stops[i+1].c[0] - stops[i].c[0]),
+        stops[i].c[1] + t * (stops[i+1].c[1] - stops[i].c[1]),
+        stops[i].c[2] + t * (stops[i+1].c[2] - stops[i].c[2]),
+      ];
+    }
+  }
+  return stops[0].c;
+}
+
+// ============================================================
+// Three.js Setup
+// ============================================================
+const container = document.getElementById('canvas-container');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a1a);
+scene.fog = new THREE.FogExp2(0x0a0a1a, 0.15);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.01, 100);
+camera.position.set(1.5, 1.2, 1.5);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 0, 0);
+controls.minDistance = 0.3;
+controls.maxDistance = 5;
+
+// Lights
+const ambientLight = new THREE.AmbientLight(0x405060, 0.6);
+scene.add(ambientLight);
+
+const sunLight = new THREE.DirectionalLight(0xfff4e0, 1.8);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.left = -2;
+sunLight.shadow.camera.right = 2;
+sunLight.shadow.camera.top = 2;
+sunLight.shadow.camera.bottom = -2;
+sunLight.shadow.camera.near = 0.1;
+sunLight.shadow.camera.far = 10;
+sunLight.shadow.bias = -0.001;
+scene.add(sunLight);
+
+// Hemisphere light for sky fill
+const hemiLight = new THREE.HemisphereLight(0x6688cc, 0x223322, 0.3);
+scene.add(hemiLight);
+
+// Terrain mesh
+const terrainScale = 1.5;
+const heightScale = 0.4;
+let terrainGeometry = new THREE.PlaneGeometry(terrainScale, terrainScale, SIZE - 1, SIZE - 1);
+const terrainMaterial = new THREE.MeshStandardMaterial({
+  vertexColors: true,
+  roughness: 0.85,
+  metalness: 0.05,
+  flatShading: false,
+  side: THREE.DoubleSide,
+});
+let terrainMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
+terrainMesh.rotation.x = -Math.PI / 2;
+terrainMesh.castShadow = true;
+terrainMesh.receiveShadow = true;
+scene.add(terrainMesh);
+
+// Water plane
+const waterGeometry = new THREE.PlaneGeometry(terrainScale * 1.5, terrainScale * 1.5);
+const waterMaterial = new THREE.MeshStandardMaterial({
+  color: 0x2266aa,
+  transparent: true,
+  opacity: 0.55,
+  roughness: 0.1,
+  metalness: 0.3,
+  side: THREE.DoubleSide,
+});
+const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
+waterMesh.rotation.x = -Math.PI / 2;
+scene.add(waterMesh);
+
+// ============================================================
+// Update Terrain Mesh
+// ============================================================
+function updateTerrain() {
+  const scheme = document.getElementById('colorScheme').value;
+  const positions = terrainGeometry.attributes.position;
+  const count = positions.count;
+  const colors = new Float32Array(count * 3);
+
+  for (let i = 0; i < count; i++) {
+    // PlaneGeometry: vertices in row-major order
+    const ix = i % SIZE;
+    const iy = Math.floor(i / SIZE);
+    const h = heightmap[iy * SIZE + ix];
+    positions.setZ(i, h * heightScale);
+
+    const [r, g, b] = getColor(h, scheme);
+    colors[i*3] = r;
+    colors[i*3+1] = g;
+    colors[i*3+2] = b;
+  }
+
+  terrainGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  terrainGeometry.computeVertexNormals();
+  positions.needsUpdate = true;
+
+  // Center vertically
+  terrainMesh.position.y = -heightScale * 0.3;
+}
+
+function updateWater() {
+  const level = +document.getElementById('waterLevel').value;
+  waterMesh.position.y = level * heightScale - heightScale * 0.3;
+  const scheme = document.getElementById('colorScheme').value;
+  const waterColors = {
+    earth: 0x2266aa, desert: 0x557744, arctic: 0x4488aa, alien: 0x6622aa
+  };
+  waterMaterial.color.set(waterColors[scheme] || 0x2266aa);
+}
+
+function updateSun() {
+  const angle = (+document.getElementById('sunAngle').value) * Math.PI / 180;
+  const elev = (+document.getElementById('sunElevation').value) * Math.PI / 180;
+  const r = 3;
+  sunLight.position.set(
+    r * Math.cos(elev) * Math.cos(angle),
+    r * Math.sin(elev),
+    r * Math.cos(elev) * Math.sin(angle)
+  );
+}
+
+// ============================================================
+// Resize
+// ============================================================
+function onResize() {
+  const w = container.clientWidth, h = container.clientHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+window.addEventListener('resize', onResize);
+
+// ============================================================
+// FPS
+// ============================================================
+let frameCount = 0, lastFpsTime = performance.now();
+const fpsEl = document.getElementById('fps');
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 500) {
+    fpsEl.textContent = (frameCount / ((now - lastFpsTime) / 1000)).toFixed(0) + ' FPS';
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+}
+
+// ============================================================
+// Slider value displays
+// ============================================================
+function bindSlider(id, display, fmt) {
+  const el = document.getElementById(id);
+  const vEl = document.getElementById(display);
+  el.addEventListener('input', () => { vEl.textContent = fmt(el.value); });
+}
+bindSlider('octaves', 'v-octaves', v => v);
+bindSlider('persistence', 'v-persistence', v => (+v).toFixed(2));
+bindSlider('lacunarity', 'v-lacunarity', v => (+v).toFixed(2));
+bindSlider('scale', 'v-scale', v => (+v).toFixed(1));
+bindSlider('drops', 'v-drops', v => v);
+bindSlider('waterLevel', 'v-water', v => (+v).toFixed(2));
+bindSlider('sunAngle', 'v-sun', v => v + '°');
+bindSlider('sunElevation', 'v-sunElev', v => v + '°');
+
+document.getElementById('waterLevel').addEventListener('input', updateWater);
+document.getElementById('sunAngle').addEventListener('input', updateSun);
+document.getElementById('sunElevation').addEventListener('input', updateSun);
+document.getElementById('colorScheme').addEventListener('change', () => { updateTerrain(); updateWater(); });
+document.getElementById('wireframe').addEventListener('change', (e) => { terrainMaterial.wireframe = e.target.checked; });
+document.getElementById('shadows').addEventListener('change', (e) => {
+  renderer.shadowMap.enabled = e.target.checked;
+  sunLight.castShadow = e.target.checked;
+  terrainMesh.castShadow = e.target.checked;
+  terrainMaterial.needsUpdate = true;
+});
+
+// ============================================================
+// Buttons
+// ============================================================
+const statusEl = document.getElementById('status');
+
+document.getElementById('btn-generate').addEventListener('click', () => {
+  statusEl.textContent = 'Generating terrain...';
+  setTimeout(() => {
+    generateTerrain();
+    updateTerrain();
+    updateWater();
+    updateSun();
+    statusEl.textContent = `Terrain generated (seed: ${seed}). Ready for erosion.`;
+  }, 20);
+});
+
+document.getElementById('btn-erode').addEventListener('click', () => {
+  const numDrops = +document.getElementById('drops').value;
+  const btn = document.getElementById('btn-erode');
+  btn.disabled = true;
+  statusEl.textContent = `Eroding with ${numDrops.toLocaleString()} drops...`;
+
+  const batchSize = 2000;
+  let done = 0;
+
+  function runBatch() {
+    const n = Math.min(batchSize, numDrops - done);
+    erode(n);
+    done += n;
+    statusEl.textContent = `Erosion: ${done.toLocaleString()} / ${numDrops.toLocaleString()} drops (${(done/numDrops*100).toFixed(0)}%)`;
+    updateTerrain();
+    if (done < numDrops) {
+      requestAnimationFrame(runBatch);
+    } else {
+      btn.disabled = false;
+      statusEl.textContent = `Erosion complete: ${numDrops.toLocaleString()} drops applied.`;
+    }
+  }
+  requestAnimationFrame(runBatch);
+});
+
+document.getElementById('btn-step').addEventListener('click', () => {
+  statusEl.textContent = 'Running 1,000 erosion steps...';
+  setTimeout(() => {
+    erode(1000);
+    updateTerrain();
+    statusEl.textContent = 'Applied 1,000 erosion drops.';
+  }, 10);
+});
+
+document.getElementById('btn-export').addEventListener('click', () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = SIZE; canvas.height = SIZE;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(SIZE, SIZE);
+  for (let i = 0; i < heightmap.length; i++) {
+    const v = Math.floor(Math.max(0, Math.min(1, heightmap[i])) * 255);
+    imgData.data[i*4] = v;
+    imgData.data[i*4+1] = v;
+    imgData.data[i*4+2] = v;
+    imgData.data[i*4+3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  const link = document.createElement('a');
+  link.download = 'heightmap.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+  statusEl.textContent = 'Heightmap exported as PNG.';
+});
+
+// ============================================================
+// Init
+// ============================================================
+onResize();
+generateTerrain();
+updateTerrain();
+updateWater();
+updateSun();
+animate();
+statusEl.textContent = 'Terrain generated. Try eroding it!';
+</script>
+</body>
+</html>

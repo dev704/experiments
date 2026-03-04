@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Procedural Planet Generator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #000; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #e0e0e0; }
+  canvas { display: block; }
+
+  #ui {
+    position: fixed; top: 16px; left: 16px; z-index: 10;
+    background: rgba(10, 12, 18, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 20px;
+    width: 280px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
+  }
+  #ui::-webkit-scrollbar { width: 4px; }
+  #ui::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+  #ui h1 {
+    font-size: 16px; font-weight: 600; margin-bottom: 4px;
+    background: linear-gradient(135deg, #88c0ff, #c088ff);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  #ui .subtitle { font-size: 11px; color: rgba(255,255,255,0.35); margin-bottom: 16px; }
+
+  .section-label {
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 1.2px; color: rgba(255,255,255,0.3);
+    margin: 16px 0 8px 0;
+  }
+  .section-label:first-of-type { margin-top: 0; }
+
+  #generate-btn {
+    width: 100%; padding: 10px; border: none; border-radius: 8px;
+    background: linear-gradient(135deg, #4a7aff, #7b4aff);
+    color: #fff; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: all 0.2s;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  }
+  #generate-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(100,120,255,0.35); }
+  #generate-btn:active { transform: translateY(0); }
+
+  .presets {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px;
+  }
+  .preset-btn {
+    padding: 5px 10px; border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px; background: rgba(255,255,255,0.04);
+    color: #ccc; font-size: 11px; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .preset-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+  .preset-btn.active { background: rgba(100,120,255,0.2); border-color: rgba(100,120,255,0.4); color: #fff; }
+
+  .slider-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 6px 0;
+  }
+  .slider-row label { font-size: 12px; color: rgba(255,255,255,0.6); flex-shrink: 0; }
+  .slider-row .val { font-size: 11px; color: rgba(255,255,255,0.4); width: 32px; text-align: right; flex-shrink: 0; }
+  .slider-row input[type=range] {
+    flex: 1; margin: 0 8px; height: 4px; -webkit-appearance: none;
+    background: rgba(255,255,255,0.1); border-radius: 2px; outline: none;
+  }
+  .slider-row input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px;
+    border-radius: 50%; background: #7b8aff; cursor: pointer;
+    border: 2px solid rgba(255,255,255,0.2);
+  }
+
+  #stats {
+    background: rgba(255,255,255,0.03);
+    border-radius: 8px; padding: 10px 12px;
+    font-size: 11px; line-height: 1.7;
+    color: rgba(255,255,255,0.45);
+  }
+  #stats .stat-val { color: rgba(255,255,255,0.75); float: right; }
+
+  @media (max-width: 600px) {
+    #ui { width: calc(100vw - 32px); max-width: 300px; padding: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <h1>🪐 Planet Generator</h1>
+  <div class="subtitle">Click Generate to discover a new world</div>
+
+  <button id="generate-btn">✦ Generate Planet</button>
+
+  <div class="section-label">Presets</div>
+  <div class="presets">
+    <button class="preset-btn" data-preset="earthlike">Earth-like</button>
+    <button class="preset-btn" data-preset="desert">Desert</button>
+    <button class="preset-btn" data-preset="ice">Ice</button>
+    <button class="preset-btn" data-preset="volcanic">Volcanic</button>
+    <button class="preset-btn" data-preset="gasgiant">Gas Giant</button>
+  </div>
+
+  <div class="section-label">Controls</div>
+  <div class="slider-row">
+    <label>Rotation</label>
+    <input type="range" id="sl-rotation" min="0" max="100" value="30">
+    <span class="val" id="v-rotation">0.3</span>
+  </div>
+  <div class="slider-row">
+    <label>Clouds</label>
+    <input type="range" id="sl-clouds" min="0" max="100" value="50">
+    <span class="val" id="v-clouds">0.5</span>
+  </div>
+  <div class="slider-row">
+    <label>Ocean</label>
+    <input type="range" id="sl-ocean" min="0" max="100" value="45">
+    <span class="val" id="v-ocean">0.45</span>
+  </div>
+  <div class="slider-row">
+    <label>Roughness</label>
+    <input type="range" id="sl-roughness" min="0" max="100" value="50">
+    <span class="val" id="v-roughness">0.5</span>
+  </div>
+
+  <div class="section-label">Planet Info</div>
+  <div id="stats">
+    <div>Type <span class="stat-val" id="stat-type">—</span></div>
+    <div>Radius <span class="stat-val" id="stat-radius">—</span></div>
+    <div>Ocean cover <span class="stat-val" id="stat-ocean">—</span></div>
+    <div>Roughness <span class="stat-val" id="stat-rough">—</span></div>
+    <div>Seed <span class="stat-val" id="stat-seed">—</span></div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ─── Noise GLSL (shared) ───
+const noiseGLSL = `
+vec3 mod289(vec3 x){ return x - floor(x*(1.0/289.0))*289.0; }
+vec4 mod289(vec4 x){ return x - floor(x*(1.0/289.0))*289.0; }
+vec4 permute(vec4 x){ return mod289(((x*34.0)+1.0)*x); }
+vec4 taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314*r; }
+
+float snoise(vec3 v){
+  const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + C.xxx;
+  vec3 x2 = x0 - i2 + C.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(
+    i.z + vec4(0.0, i1.z, i2.z, 1.0))
+    + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+    + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+  vec4 j = p - 49.0*floor(p*ns.z*ns.z);
+  vec4 x_ = floor(j*ns.z);
+  vec4 y_ = floor(j - 7.0*x_);
+  vec4 x = x_*ns.x + ns.yyyy;
+  vec4 y = y_*ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0)*2.0 + 1.0;
+  vec4 s1 = floor(b1)*2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  vec4 m = max(0.6 - vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)), 0.0);
+  m = m*m;
+  return 42.0 * dot(m*m, vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+}
+
+float fbm(vec3 p, float seed, int octaves, float roughness){
+  float val = 0.0;
+  float amp = 0.5;
+  float freq = 1.0;
+  vec3 offset = vec3(seed * 17.3, seed * 31.7, seed * 53.1);
+  for(int i = 0; i < 8; i++){
+    if(i >= octaves) break;
+    val += amp * snoise(p * freq + offset);
+    freq *= 2.0;
+    amp *= roughness;
+  }
+  return val;
+}
+`;
+
+// ─── Planet Surface Shader ───
+const planetVert = `
+${noiseGLSL}
+uniform float uSeed;
+uniform float uRoughness;
+uniform float uDisplacement;
+uniform float uOceanLevel;
+varying vec3 vNormal;
+varying vec3 vPosition;
+varying float vElevation;
+varying vec3 vWorldNormal;
+varying vec3 vWorldPos;
+
+void main(){
+  vec3 pos = position;
+  float n = fbm(normalize(pos) * 2.0, uSeed, 6, uRoughness);
+  float elev = n * uDisplacement;
+  vElevation = n;
+  vec3 displaced = pos + normal * elev;
+  vNormal = normalMatrix * normal;
+  vPosition = displaced;
+  vWorldPos = (modelMatrix * vec4(displaced, 1.0)).xyz;
+  vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
+}
+`;
+
+const planetFrag = `
+${noiseGLSL}
+uniform float uSeed;
+uniform float uOceanLevel;
+uniform float uTime;
+uniform vec3 uColor1; // deep ocean
+uniform vec3 uColor2; // shallow water
+uniform vec3 uColor3; // beach/sand
+uniform vec3 uColor4; // lowland
+uniform vec3 uColor5; // highland
+uniform vec3 uColor6; // snow/peak
+uniform vec3 uLightDir;
+uniform float uNightGlow;
+varying vec3 vNormal;
+varying vec3 vPosition;
+varying float vElevation;
+varying vec3 vWorldNormal;
+varying vec3 vWorldPos;
+
+void main(){
+  float e = vElevation;
+  float oceanLvl = uOceanLevel * -0.15;
+
+  vec3 col;
+  if(e < oceanLvl - 0.1) col = uColor1;
+  else if(e < oceanLvl) col = mix(uColor1, uColor2, (e - (oceanLvl - 0.1)) / 0.1);
+  else if(e < oceanLvl + 0.03) col = mix(uColor2, uColor3, (e - oceanLvl) / 0.03);
+  else if(e < 0.15) col = mix(uColor3, uColor4, (e - oceanLvl - 0.03) / (0.15 - oceanLvl - 0.03));
+  else if(e < 0.35) col = mix(uColor4, uColor5, (e - 0.15) / 0.2);
+  else col = mix(uColor5, uColor6, clamp((e - 0.35) / 0.15, 0.0, 1.0));
+
+  // Micro detail
+  float detail = snoise(vWorldPos * 40.0 + uSeed * 7.0) * 0.05;
+  col += detail;
+
+  // Lighting
+  float NdotL = dot(normalize(vWorldNormal), normalize(uLightDir));
+  float diffuse = max(NdotL, 0.0);
+  float ambient = 0.06;
+  vec3 lit = col * (ambient + diffuse * 0.94);
+
+  // Night side — city lights / volcanic glow
+  if(NdotL < 0.0){
+    float darkness = clamp(-NdotL, 0.0, 1.0);
+    float cityNoise = snoise(vWorldPos * 30.0 + vec3(uSeed * 5.0));
+    float landMask = step(uOceanLevel * -0.15, vElevation);
+    float cities = step(0.72, cityNoise) * landMask * darkness * uNightGlow;
+    vec3 glowColor = mix(vec3(1.0, 0.85, 0.4), vec3(1.0, 0.3, 0.1), uNightGlow > 0.8 ? 0.7 : 0.0);
+    lit += cities * glowColor * 0.8;
+  }
+
+  gl_FragColor = vec4(lit, 1.0);
+}
+`;
+
+// ─── Ocean Shader ───
+const oceanVert = `
+${noiseGLSL}
+uniform float uTime;
+uniform float uOceanLevel;
+varying vec3 vWorldNormal;
+varying vec3 vWorldPos;
+varying vec3 vViewDir;
+
+void main(){
+  vec3 pos = position;
+  float wave = snoise(pos * 8.0 + uTime * 0.3) * 0.003;
+  wave += snoise(pos * 16.0 + uTime * 0.5) * 0.001;
+  vec3 displaced = pos + normal * wave;
+  vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+  vWorldPos = (modelMatrix * vec4(displaced, 1.0)).xyz;
+  vViewDir = normalize(cameraPosition - vWorldPos);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
+}
+`;
+
+const oceanFrag = `
+uniform vec3 uLightDir;
+uniform vec3 uOceanColor;
+uniform float uTime;
+varying vec3 vWorldNormal;
+varying vec3 vWorldPos;
+varying vec3 vViewDir;
+
+void main(){
+  vec3 N = normalize(vWorldNormal);
+  vec3 L = normalize(uLightDir);
+  vec3 V = normalize(vViewDir);
+
+  float NdotL = max(dot(N, L), 0.0);
+  float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+
+  vec3 H = normalize(L + V);
+  float spec = pow(max(dot(N, H), 0.0), 80.0) * 0.6;
+
+  vec3 col = uOceanColor * (0.08 + NdotL * 0.6);
+  col += vec3(0.6, 0.75, 1.0) * fresnel * 0.35;
+  col += vec3(1.0) * spec * NdotL;
+
+  float alpha = 0.7 + fresnel * 0.25;
+  alpha *= step(0.0, NdotL) * 0.7 + 0.3;
+
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+// ─── Atmosphere Shader ───
+const atmosVert = `
+varying vec3 vWorldNormal;
+varying vec3 vViewDir;
+void main(){
+  vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+  vec3 worldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+  vViewDir = normalize(cameraPosition - worldPos);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const atmosFrag = `
+uniform vec3 uAtmosColor;
+uniform vec3 uLightDir;
+varying vec3 vWorldNormal;
+varying vec3 vViewDir;
+
+void main(){
+  vec3 N = normalize(vWorldNormal);
+  vec3 V = normalize(vViewDir);
+  vec3 L = normalize(uLightDir);
+
+  float rim = 1.0 - max(dot(N, V), 0.0);
+  float glow = pow(rim, 3.0);
+  float sunSide = max(dot(N, L), 0.0) * 0.5 + 0.5;
+
+  vec3 col = uAtmosColor * glow * sunSide;
+  float alpha = glow * 0.6 * sunSide;
+
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+// ─── Cloud Shader ───
+const cloudVert = `
+varying vec3 vWorldNormal;
+varying vec3 vWorldPos;
+varying vec3 vLocalPos;
+void main(){
+  vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+  vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+  vLocalPos = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const cloudFrag = `
+${noiseGLSL}
+uniform float uSeed;
+uniform float uCloudDensity;
+uniform float uTime;
+uniform vec3 uLightDir;
+varying vec3 vWorldNormal;
+varying vec3 vWorldPos;
+varying vec3 vLocalPos;
+
+void main(){
+  vec3 N = normalize(vWorldNormal);
+  vec3 L = normalize(uLightDir);
+  float NdotL = max(dot(N, L), 0.0);
+
+  vec3 p = normalize(vLocalPos) * 3.0;
+  float n = fbm(p + vec3(uTime * 0.02, 0.0, uTime * 0.015), uSeed + 100.0, 5, 0.55);
+  float cloud = smoothstep(0.1 - uCloudDensity * 0.4, 0.4 - uCloudDensity * 0.2, n);
+
+  float light = 0.3 + NdotL * 0.7;
+  vec3 col = vec3(1.0) * light;
+
+  float alpha = cloud * (0.6 + uCloudDensity * 0.3);
+  alpha *= (NdotL * 0.5 + 0.5);
+
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+// ─── Setup ───
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 1000);
+camera.position.set(0, 0, 3.5);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.minDistance = 1.8;
+controls.maxDistance = 10;
+controls.enablePan = false;
+
+// ─── Light ───
+const sunAngle = { theta: 0.8, phi: 0.3 };
+const lightDir = new THREE.Vector3();
+function updateLightDir(){
+  lightDir.set(
+    Math.cos(sunAngle.phi) * Math.cos(sunAngle.theta),
+    Math.sin(sunAngle.phi),
+    Math.cos(sunAngle.phi) * Math.sin(sunAngle.theta)
+  ).normalize();
+}
+updateLightDir();
+
+// ─── Stars ───
+function createStars(){
+  const geo = new THREE.BufferGeometry();
+  const count = 3000;
+  const positions = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+  for(let i = 0; i < count; i++){
+    const r = 80 + Math.random() * 120;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i*3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i*3+2] = r * Math.cos(phi);
+    sizes[i] = 0.5 + Math.random() * 2.0;
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+  const mat = new THREE.PointsMaterial({
+    color: 0xffffff, size: 0.15, sizeAttenuation: true, transparent: true, opacity: 0.8
+  });
+  return new THREE.Points(geo, mat);
+}
+scene.add(createStars());
+
+// ─── Planet params ───
+let params = {
+  seed: Math.random() * 1000,
+  roughness: 0.5,
+  displacement: 0.2,
+  oceanLevel: 0.45,
+  cloudDensity: 0.5,
+  rotationSpeed: 0.3,
+  nightGlow: 0.5,
+  type: 'earthlike',
+  colors: {
+    ocean1: new THREE.Color(0x0a1a3a),
+    ocean2: new THREE.Color(0x1a5a8a),
+    beach: new THREE.Color(0xc4a86a),
+    lowland: new THREE.Color(0x3a8a3a),
+    highland: new THREE.Color(0x6a5040),
+    snow: new THREE.Color(0xe8e8f0),
+  },
+  oceanColor: new THREE.Color(0x0a3060),
+  atmosColor: new THREE.Color(0x4488ff),
+  radius: 6371,
+};
+
+// ─── Presets ───
+const presets = {
+  earthlike: {
+    roughness: 0.5, displacement: 0.2, oceanLevel: 0.45, cloudDensity: 0.5, nightGlow: 0.5,
+    colors: {
+      ocean1: new THREE.Color(0x0a1a3a), ocean2: new THREE.Color(0x1a5a8a),
+      beach: new THREE.Color(0xc4a86a), lowland: new THREE.Color(0x3a8a3a),
+      highland: new THREE.Color(0x6a5040), snow: new THREE.Color(0xe8e8f0),
+    },
+    oceanColor: new THREE.Color(0x0a3060), atmosColor: new THREE.Color(0x4488ff),
+  },
+  desert: {
+    roughness: 0.45, displacement: 0.15, oceanLevel: 0.1, cloudDensity: 0.15, nightGlow: 0.4,
+    colors: {
+      ocean1: new THREE.Color(0x2a1a0a), ocean2: new THREE.Color(0x5a3a1a),
+      beach: new THREE.Color(0xd4a050), lowland: new THREE.Color(0xc49040),
+      highland: new THREE.Color(0x8a6030), snow: new THREE.Color(0xd8c8a0),
+    },
+    oceanColor: new THREE.Color(0x3a2a10), atmosColor: new THREE.Color(0xffaa44),
+  },
+  ice: {
+    roughness: 0.4, displacement: 0.12, oceanLevel: 0.3, cloudDensity: 0.6, nightGlow: 0.2,
+    colors: {
+      ocean1: new THREE.Color(0x0a2a4a), ocean2: new THREE.Color(0x3a6a8a),
+      beach: new THREE.Color(0x8ab8d0), lowland: new THREE.Color(0xa0d0e8),
+      highland: new THREE.Color(0xc8e0f0), snow: new THREE.Color(0xf0f4ff),
+    },
+    oceanColor: new THREE.Color(0x1a4a6a), atmosColor: new THREE.Color(0x88ccff),
+  },
+  volcanic: {
+    roughness: 0.65, displacement: 0.3, oceanLevel: 0.15, cloudDensity: 0.35, nightGlow: 1.0,
+    colors: {
+      ocean1: new THREE.Color(0x1a0a0a), ocean2: new THREE.Color(0x3a1a0a),
+      beach: new THREE.Color(0x2a2020), lowland: new THREE.Color(0x3a2a20),
+      highland: new THREE.Color(0x4a3020), snow: new THREE.Color(0xff4400),
+    },
+    oceanColor: new THREE.Color(0x200a00), atmosColor: new THREE.Color(0xff6622),
+  },
+  gasgiant: {
+    roughness: 0.3, displacement: 0.05, oceanLevel: 0.0, cloudDensity: 0.8, nightGlow: 0.1,
+    colors: {
+      ocean1: new THREE.Color(0x4a3020), ocean2: new THREE.Color(0x6a5040),
+      beach: new THREE.Color(0x8a7050), lowland: new THREE.Color(0xc0a070),
+      highland: new THREE.Color(0x6a4030), snow: new THREE.Color(0xe8d0a0),
+    },
+    oceanColor: new THREE.Color(0x4a3020), atmosColor: new THREE.Color(0xddaa66),
+  },
+};
+
+// ─── Planet meshes ───
+const planetGeo = new THREE.SphereGeometry(1, 128, 128);
+
+const planetMat = new THREE.ShaderMaterial({
+  vertexShader: planetVert,
+  fragmentShader: planetFrag,
+  uniforms: {
+    uSeed: { value: 0 },
+    uRoughness: { value: 0.5 },
+    uDisplacement: { value: 0.2 },
+    uOceanLevel: { value: 0.45 },
+    uTime: { value: 0 },
+    uLightDir: { value: lightDir },
+    uNightGlow: { value: 0.5 },
+    uColor1: { value: new THREE.Color() },
+    uColor2: { value: new THREE.Color() },
+    uColor3: { value: new THREE.Color() },
+    uColor4: { value: new THREE.Color() },
+    uColor5: { value: new THREE.Color() },
+    uColor6: { value: new THREE.Color() },
+  }
+});
+const planetMesh = new THREE.Mesh(planetGeo, planetMat);
+scene.add(planetMesh);
+
+// Ocean
+const oceanGeo = new THREE.SphereGeometry(1, 96, 96);
+const oceanMat = new THREE.ShaderMaterial({
+  vertexShader: oceanVert,
+  fragmentShader: oceanFrag,
+  uniforms: {
+    uTime: { value: 0 },
+    uOceanLevel: { value: 0.45 },
+    uLightDir: { value: lightDir },
+    uOceanColor: { value: new THREE.Color(0x0a3060) },
+  },
+  transparent: true,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+});
+const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
+scene.add(oceanMesh);
+
+// Clouds
+const cloudGeo = new THREE.SphereGeometry(1.025, 80, 80);
+const cloudMat = new THREE.ShaderMaterial({
+  vertexShader: cloudVert,
+  fragmentShader: cloudFrag,
+  uniforms: {
+    uSeed: { value: 0 },
+    uCloudDensity: { value: 0.5 },
+    uTime: { value: 0 },
+    uLightDir: { value: lightDir },
+  },
+  transparent: true,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+});
+const cloudMesh = new THREE.Mesh(cloudGeo, cloudMat);
+scene.add(cloudMesh);
+
+// Atmosphere
+const atmosGeo = new THREE.SphereGeometry(1.12, 64, 64);
+const atmosMat = new THREE.ShaderMaterial({
+  vertexShader: atmosVert,
+  fragmentShader: atmosFrag,
+  uniforms: {
+    uAtmosColor: { value: new THREE.Color(0x4488ff) },
+    uLightDir: { value: lightDir },
+  },
+  transparent: true,
+  depthWrite: false,
+  side: THREE.BackSide,
+});
+const atmosMesh = new THREE.Mesh(atmosGeo, atmosMat);
+scene.add(atmosMesh);
+
+// ─── Apply params ───
+function applyParams(){
+  const p = params;
+  planetMat.uniforms.uSeed.value = p.seed;
+  planetMat.uniforms.uRoughness.value = p.roughness;
+  planetMat.uniforms.uDisplacement.value = p.displacement;
+  planetMat.uniforms.uOceanLevel.value = p.oceanLevel;
+  planetMat.uniforms.uNightGlow.value = p.nightGlow;
+  planetMat.uniforms.uColor1.value.copy(p.colors.ocean1);
+  planetMat.uniforms.uColor2.value.copy(p.colors.ocean2);
+  planetMat.uniforms.uColor3.value.copy(p.colors.beach);
+  planetMat.uniforms.uColor4.value.copy(p.colors.lowland);
+  planetMat.uniforms.uColor5.value.copy(p.colors.highland);
+  planetMat.uniforms.uColor6.value.copy(p.colors.snow);
+
+  oceanMat.uniforms.uOceanLevel.value = p.oceanLevel;
+  oceanMat.uniforms.uOceanColor.value.copy(p.oceanColor);
+  // Scale ocean sphere to sit at "sea level"
+  const oscale = 1.0 + p.oceanLevel * 0.001;
+  oceanMesh.scale.setScalar(oscale);
+  oceanMesh.visible = p.oceanLevel > 0.02;
+
+  cloudMat.uniforms.uSeed.value = p.seed;
+  cloudMat.uniforms.uCloudDensity.value = p.cloudDensity;
+
+  atmosMat.uniforms.uAtmosColor.value.copy(p.atmosColor);
+
+  // Stats
+  const oceanPct = Math.round(p.oceanLevel * 100);
+  document.getElementById('stat-type').textContent = p.type.charAt(0).toUpperCase() + p.type.slice(1).replace('like','‑like').replace('gasgiant','Gas Giant');
+  document.getElementById('stat-radius').textContent = (p.radius + Math.round(p.seed * 3)).toLocaleString() + ' km';
+  document.getElementById('stat-ocean').textContent = oceanPct + '%';
+  document.getElementById('stat-rough').textContent = p.roughness.toFixed(2);
+  document.getElementById('stat-seed').textContent = Math.round(p.seed);
+}
+
+function randomizeParams(preset){
+  const base = presets[preset] || presets.earthlike;
+  params.seed = Math.random() * 1000;
+  params.type = preset;
+  params.roughness = base.roughness + (Math.random() - 0.5) * 0.15;
+  params.displacement = base.displacement + (Math.random() - 0.5) * 0.06;
+  params.oceanLevel = base.oceanLevel + (Math.random() - 0.5) * 0.15;
+  params.cloudDensity = base.cloudDensity + (Math.random() - 0.5) * 0.2;
+  params.nightGlow = base.nightGlow;
+  params.radius = preset === 'gasgiant' ? 40000 + Math.random() * 30000 : 3000 + Math.random() * 8000;
+
+  // Slightly randomize colors
+  const jitter = (c, amount) => {
+    const col = c.clone();
+    col.r = Math.max(0, Math.min(1, col.r + (Math.random() - 0.5) * amount));
+    col.g = Math.max(0, Math.min(1, col.g + (Math.random() - 0.5) * amount));
+    col.b = Math.max(0, Math.min(1, col.b + (Math.random() - 0.5) * amount));
+    return col;
+  };
+  params.colors = {
+    ocean1: jitter(base.colors.ocean1, 0.1),
+    ocean2: jitter(base.colors.ocean2, 0.1),
+    beach: jitter(base.colors.beach, 0.1),
+    lowland: jitter(base.colors.lowland, 0.15),
+    highland: jitter(base.colors.highland, 0.1),
+    snow: jitter(base.colors.snow, 0.08),
+  };
+  params.oceanColor = jitter(base.oceanColor, 0.1);
+  params.atmosColor = jitter(base.atmosColor, 0.12);
+
+  // Update sliders
+  document.getElementById('sl-rotation').value = Math.round(params.rotationSpeed * 100);
+  document.getElementById('sl-clouds').value = Math.round(params.cloudDensity * 100);
+  document.getElementById('sl-ocean').value = Math.round(params.oceanLevel * 100);
+  document.getElementById('sl-roughness').value = Math.round(params.roughness * 100);
+  updateSliderDisplays();
+
+  applyParams();
+}
+
+// ─── UI ───
+function updateSliderDisplays(){
+  document.getElementById('v-rotation').textContent = (parseInt(document.getElementById('sl-rotation').value) / 100).toFixed(2);
+  document.getElementById('v-clouds').textContent = (parseInt(document.getElementById('sl-clouds').value) / 100).toFixed(2);
+  document.getElementById('v-ocean').textContent = (parseInt(document.getElementById('sl-ocean').value) / 100).toFixed(2);
+  document.getElementById('v-roughness').textContent = (parseInt(document.getElementById('sl-roughness').value) / 100).toFixed(2);
+}
+
+document.getElementById('generate-btn').addEventListener('click', () => {
+  randomizeParams(params.type);
+});
+
+document.querySelectorAll('.preset-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    randomizeParams(btn.dataset.preset);
+  });
+});
+
+['rotation','clouds','ocean','roughness'].forEach(name => {
+  const sl = document.getElementById('sl-' + name);
+  sl.addEventListener('input', () => {
+    const v = parseInt(sl.value) / 100;
+    if(name === 'rotation') params.rotationSpeed = v;
+    if(name === 'clouds') { params.cloudDensity = v; cloudMat.uniforms.uCloudDensity.value = v; }
+    if(name === 'ocean') { params.oceanLevel = v; applyParams(); }
+    if(name === 'roughness') { params.roughness = v; planetMat.uniforms.uRoughness.value = v; }
+    updateSliderDisplays();
+    // Update stats display
+    document.getElementById('stat-ocean').textContent = Math.round(params.oceanLevel * 100) + '%';
+    document.getElementById('stat-rough').textContent = params.roughness.toFixed(2);
+  });
+});
+
+// ─── Animation ───
+const clock = new THREE.Clock();
+
+function animate(){
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  const dt = clock.getDelta();
+
+  planetMat.uniforms.uTime.value = t;
+  oceanMat.uniforms.uTime.value = t;
+  cloudMat.uniforms.uTime.value = t;
+
+  // Rotate planet & clouds
+  const rSpeed = params.rotationSpeed * 0.003;
+  planetMesh.rotation.y += rSpeed;
+  oceanMesh.rotation.y += rSpeed;
+  cloudMesh.rotation.y += rSpeed * 1.15; // clouds drift faster
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// ─── Resize ───
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ─── Init ───
+randomizeParams('earthlike');
+document.querySelector('[data-preset="earthlike"]').classList.add('active');
+animate();
+
+</script>
+</body>
+</html>
