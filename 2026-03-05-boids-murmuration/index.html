@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Murmuration — 3D Boids Simulator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #000; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #eee; }
+  canvas { display: block; }
+
+  #ui-panel {
+    position: fixed; top: 0; right: 0; width: 280px; max-height: 100vh;
+    background: rgba(10,10,18,0.88); backdrop-filter: blur(12px);
+    border-left: 1px solid rgba(255,255,255,0.08);
+    padding: 16px; overflow-y: auto; z-index: 100;
+    transition: transform 0.3s ease;
+  }
+  #ui-panel.collapsed { transform: translateX(260px); }
+  #ui-panel.collapsed #collapse-btn { transform: rotate(180deg); }
+
+  #collapse-btn {
+    position: absolute; left: -32px; top: 12px; width: 28px; height: 28px;
+    background: rgba(10,10,18,0.88); border: 1px solid rgba(255,255,255,0.1);
+    border-right: none; border-radius: 6px 0 0 6px; color: #aaa; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+    transition: transform 0.3s ease;
+  }
+  #collapse-btn:hover { color: #fff; }
+
+  h1 { font-size: 15px; font-weight: 600; margin-bottom: 2px; letter-spacing: 0.5px; }
+  .poetic { font-size: 11px; color: rgba(255,255,255,0.4); font-style: italic; margin-bottom: 14px; line-height: 1.4; }
+  #fps { font-size: 11px; color: rgba(255,255,255,0.35); margin-bottom: 12px; font-family: monospace; }
+
+  .section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: rgba(255,255,255,0.3); margin: 14px 0 8px; }
+
+  .slider-row { margin-bottom: 8px; }
+  .slider-row label { font-size: 11px; color: rgba(255,255,255,0.6); display: flex; justify-content: space-between; margin-bottom: 3px; }
+  .slider-row label span { color: rgba(255,255,255,0.35); font-family: monospace; font-size: 10px; }
+  input[type="range"] {
+    -webkit-appearance: none; width: 100%; height: 4px; background: rgba(255,255,255,0.1);
+    border-radius: 2px; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+    background: rgba(255,255,255,0.6); cursor: pointer;
+  }
+
+  .theme-buttons { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .theme-btn {
+    flex: 1; min-width: 55px; padding: 6px 4px; font-size: 10px; border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.6); border-radius: 6px;
+    cursor: pointer; text-align: center; transition: all 0.2s;
+  }
+  .theme-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+  .theme-btn.active { border-color: rgba(255,255,255,0.4); color: #fff; background: rgba(255,255,255,0.12); }
+
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .toggle-row span { font-size: 11px; color: rgba(255,255,255,0.6); }
+  .toggle {
+    width: 36px; height: 20px; background: rgba(255,255,255,0.15); border-radius: 10px;
+    cursor: pointer; position: relative; transition: background 0.2s;
+  }
+  .toggle.on { background: rgba(120,200,255,0.4); }
+  .toggle::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    background: rgba(255,255,255,0.7); border-radius: 50%; transition: left 0.2s;
+  }
+  .toggle.on::after { left: 18px; }
+
+  .btn-row { display: flex; gap: 6px; margin-top: 6px; }
+  .action-btn {
+    flex: 1; padding: 8px; font-size: 11px; border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.6); border-radius: 6px;
+    cursor: pointer; text-align: center; transition: all 0.2s;
+  }
+  .action-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+  .hint { font-size: 10px; color: rgba(255,255,255,0.25); margin-top: 12px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div id="ui-panel">
+  <button id="collapse-btn">›</button>
+  <h1>Murmuration</h1>
+  <div class="poetic">A thousand wings, one mind.<br>Watch them breathe together.</div>
+  <div id="fps">FPS: --</div>
+
+  <div class="section-label">Theme</div>
+  <div class="theme-buttons">
+    <button class="theme-btn active" data-theme="dusk">Dusk</button>
+    <button class="theme-btn" data-theme="ocean">Ocean</button>
+    <button class="theme-btn" data-theme="neon">Neon</button>
+    <button class="theme-btn" data-theme="mono">Mono</button>
+  </div>
+
+  <div class="section-label">Flock Behaviour</div>
+  <div class="slider-row">
+    <label>Separation <span id="sep-val">1.0</span></label>
+    <input type="range" id="separation" min="0" max="3" step="0.1" value="1.0">
+  </div>
+  <div class="slider-row">
+    <label>Alignment <span id="ali-val">1.0</span></label>
+    <input type="range" id="alignment" min="0" max="3" step="0.1" value="1.0">
+  </div>
+  <div class="slider-row">
+    <label>Cohesion <span id="coh-val">1.0</span></label>
+    <input type="range" id="cohesion" min="0" max="3" step="0.1" value="1.0">
+  </div>
+  <div class="slider-row">
+    <label>Speed <span id="spd-val">1.0</span></label>
+    <input type="range" id="speed" min="0.2" max="3" step="0.1" value="1.0">
+  </div>
+  <div class="slider-row">
+    <label>Boids <span id="cnt-val">2000</span></label>
+    <input type="range" id="boidCount" min="200" max="4000" step="100" value="2000">
+  </div>
+  <div class="slider-row">
+    <label>Trail length <span id="trail-val">0</span></label>
+    <input type="range" id="trailLen" min="0" max="8" step="1" value="0">
+  </div>
+
+  <div class="section-label">Options</div>
+  <div class="toggle-row">
+    <span>Predator</span>
+    <div class="toggle on" id="predator-toggle"></div>
+  </div>
+
+  <div class="btn-row">
+    <button class="action-btn" id="pause-btn">⏸ Pause</button>
+    <button class="action-btn" id="reset-btn">↺ Reset</button>
+  </div>
+
+  <div class="hint">Click anywhere to scare the flock.<br>Drag predator (red sphere) to steer it.</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ─── CONFIG ────────────────────────────────────────────────────
+const CONFIG = {
+  separation: 1.0, alignment: 1.0, cohesion: 1.0,
+  speed: 1.0, boidCount: 2000, trailLen: 0,
+  predatorOn: true, paused: false,
+  theme: 'dusk',
+  // Internal constants
+  perceptionRadius: 8,
+  separationRadius: 3,
+  maxSpeed: 40,
+  maxForce: 60,
+  boundRadius: 80,
+  boundForce: 50,
+  predatorRadius: 25,
+  predatorForce: 120,
+  scareRadius: 20,
+  scareForce: 80,
+  scareDuration: 2.0,
+  cellSize: 10,
+};
+
+// ─── THEMES ────────────────────────────────────────────────────
+const THEMES = {
+  dusk: {
+    bg: new THREE.Color(0x1a0a2e),
+    fog: new THREE.Color(0x1a0a2e),
+    boidColor: new THREE.Color(0x111111),
+    boidEmissive: new THREE.Color(0x000000),
+    ambientColor: 0x443366,
+    dirColor: 0xffaa55,
+    skyColors: [0xff6633, 0xcc3366, 0x331155, 0x0a0520],
+    particleColor: 0xffaa77,
+    particleOpacity: 0.15,
+  },
+  ocean: {
+    bg: new THREE.Color(0x020812),
+    fog: new THREE.Color(0x020812),
+    boidColor: new THREE.Color(0x00aaff),
+    boidEmissive: new THREE.Color(0x0066aa),
+    ambientColor: 0x001133,
+    dirColor: 0x0088cc,
+    skyColors: [0x001122, 0x002244, 0x001133, 0x000811],
+    particleColor: 0x00ccff,
+    particleOpacity: 0.3,
+  },
+  neon: {
+    bg: new THREE.Color(0x050505),
+    fog: new THREE.Color(0x050505),
+    boidColor: new THREE.Color(0xff00ff),
+    boidEmissive: new THREE.Color(0xff0088),
+    ambientColor: 0x110011,
+    dirColor: 0x8800ff,
+    skyColors: [0x0a0a0a, 0x050505, 0x080808, 0x030303],
+    particleColor: 0xff00ff,
+    particleOpacity: 0.25,
+  },
+  mono: {
+    bg: new THREE.Color(0x000000),
+    fog: new THREE.Color(0x000000),
+    boidColor: new THREE.Color(0xdddddd),
+    boidEmissive: new THREE.Color(0x222222),
+    ambientColor: 0x333333,
+    dirColor: 0xffffff,
+    skyColors: [0x111111, 0x080808, 0x0a0a0a, 0x050505],
+    particleColor: 0xaaaaaa,
+    particleOpacity: 0.1,
+  },
+};
+
+// ─── RENDERER / SCENE / CAMERA ─────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.004);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 500);
+camera.position.set(0, 30, 120);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.minDistance = 20;
+controls.maxDistance = 250;
+controls.target.set(0, 0, 0);
+
+// ─── LIGHTS ────────────────────────────────────────────────────
+const ambientLight = new THREE.AmbientLight(0x333333, 0.6);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(50, 80, 50);
+scene.add(dirLight);
+const hemiLight = new THREE.HemisphereLight(0x444466, 0x222233, 0.4);
+scene.add(hemiLight);
+
+// ─── SKY SPHERE ────────────────────────────────────────────────
+const skyGeo = new THREE.SphereGeometry(300, 32, 32);
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  uniforms: {
+    colorTop: { value: new THREE.Color(0xff6633) },
+    colorMid1: { value: new THREE.Color(0xcc3366) },
+    colorMid2: { value: new THREE.Color(0x331155) },
+    colorBot: { value: new THREE.Color(0x0a0520) },
+  },
+  vertexShader: `
+    varying vec3 vWorldPos;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPos = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 colorTop, colorMid1, colorMid2, colorBot;
+    varying vec3 vWorldPos;
+    void main() {
+      float h = normalize(vWorldPos).y * 0.5 + 0.5;
+      vec3 c;
+      if (h > 0.6) c = mix(colorMid1, colorTop, (h - 0.6) / 0.4);
+      else if (h > 0.35) c = mix(colorMid2, colorMid1, (h - 0.35) / 0.25);
+      else c = mix(colorBot, colorMid2, h / 0.35);
+      gl_FragColor = vec4(c, 1.0);
+    }
+  `,
+});
+const sky = new THREE.Mesh(skyGeo, skyMat);
+scene.add(sky);
+
+// ─── AMBIENT PARTICLES ─────────────────────────────────────────
+const PARTICLE_COUNT = 500;
+const particleGeo = new THREE.BufferGeometry();
+const particlePositions = new Float32Array(PARTICLE_COUNT * 3);
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+  particlePositions[i * 3] = (Math.random() - 0.5) * 250;
+  particlePositions[i * 3 + 1] = (Math.random() - 0.5) * 250;
+  particlePositions[i * 3 + 2] = (Math.random() - 0.5) * 250;
+}
+particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+const particleMat = new THREE.PointsMaterial({ size: 0.8, transparent: true, opacity: 0.15, color: 0xffaa77, depthWrite: false });
+const particles = new THREE.Points(particleGeo, particleMat);
+scene.add(particles);
+
+// ─── BOID INSTANCED MESH ───────────────────────────────────────
+const MAX_BOIDS = 4000;
+const boidGeo = new THREE.ConeGeometry(0.3, 1.4, 4);
+boidGeo.rotateX(Math.PI / 2);
+const boidMat = new THREE.MeshPhongMaterial({
+  color: 0x111111,
+  emissive: 0x000000,
+  shininess: 20,
+  flatShading: true,
+});
+const boidMesh = new THREE.InstancedMesh(boidGeo, boidMat, MAX_BOIDS);
+boidMesh.count = CONFIG.boidCount;
+boidMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+// Per-instance color for neon theme
+const boidColors = new Float32Array(MAX_BOIDS * 3);
+boidMesh.instanceColor = new THREE.InstancedBufferAttribute(boidColors, 3);
+boidMesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+scene.add(boidMesh);
+
+// ─── TRAIL SYSTEM ──────────────────────────────────────────────
+const MAX_TRAIL_LEN = 8;
+const trailGeo = new THREE.BufferGeometry();
+const trailPositions = new Float32Array(MAX_BOIDS * MAX_TRAIL_LEN * 3);
+const trailColors = new Float32Array(MAX_BOIDS * MAX_TRAIL_LEN * 4);
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+trailGeo.setAttribute('color', new THREE.BufferAttribute(trailColors, 4));
+const trailMat = new THREE.PointsMaterial({
+  size: 0.5, transparent: true, opacity: 0.4,
+  vertexColors: true, depthWrite: false, blending: THREE.AdditiveBlending,
+});
+const trailPoints = new THREE.Points(trailGeo, trailMat);
+trailPoints.frustumCulled = false;
+scene.add(trailPoints);
+
+// Trail history storage
+const trailHistory = new Array(MAX_BOIDS);
+for (let i = 0; i < MAX_BOIDS; i++) trailHistory[i] = [];
+
+// ─── PREDATOR ──────────────────────────────────────────────────
+const predatorGeo = new THREE.SphereGeometry(1.2, 12, 12);
+const predatorMat = new THREE.MeshPhongMaterial({ color: 0xcc2222, emissive: 0x661111, shininess: 40 });
+const predatorMesh = new THREE.Mesh(predatorGeo, predatorMat);
+scene.add(predatorMesh);
+
+const predatorState = {
+  pos: new THREE.Vector3(40, 20, 0),
+  vel: new THREE.Vector3(-8, 0, 5),
+  target: null,
+  wanderAngle: 0,
+};
+
+// ─── BOID DATA (SoA) ──────────────────────────────────────────
+const boids = {
+  px: new Float32Array(MAX_BOIDS), py: new Float32Array(MAX_BOIDS), pz: new Float32Array(MAX_BOIDS),
+  vx: new Float32Array(MAX_BOIDS), vy: new Float32Array(MAX_BOIDS), vz: new Float32Array(MAX_BOIDS),
+};
+
+function initBoids(count) {
+  for (let i = 0; i < count; i++) {
+    const r = CONFIG.boundRadius * 0.5;
+    boids.px[i] = (Math.random() - 0.5) * r;
+    boids.py[i] = (Math.random() - 0.5) * r;
+    boids.pz[i] = (Math.random() - 0.5) * r;
+    boids.vx[i] = (Math.random() - 0.5) * 10;
+    boids.vy[i] = (Math.random() - 0.5) * 10;
+    boids.vz[i] = (Math.random() - 0.5) * 10;
+  }
+  for (let i = 0; i < MAX_BOIDS; i++) trailHistory[i] = [];
+}
+
+initBoids(CONFIG.boidCount);
+
+// ─── SPATIAL HASH ──────────────────────────────────────────────
+class SpatialHash {
+  constructor(cellSize) {
+    this.cellSize = cellSize;
+    this.inv = 1 / cellSize;
+    this.map = new Map();
+  }
+  clear() { this.map.clear(); }
+  _key(x, y, z) {
+    const cx = (x * this.inv) | 0;
+    const cy = (y * this.inv) | 0;
+    const cz = (z * this.inv) | 0;
+    return (cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791);
+  }
+  insert(i, x, y, z) {
+    const k = this._key(x, y, z);
+    let bucket = this.map.get(k);
+    if (!bucket) { bucket = []; this.map.set(k, bucket); }
+    bucket.push(i);
+  }
+  query(x, y, z, radius, out) {
+    out.length = 0;
+    const r = Math.ceil(radius * this.inv);
+    const cx = (x * this.inv) | 0;
+    const cy = (y * this.inv) | 0;
+    const cz = (z * this.inv) | 0;
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dz = -r; dz <= r; dz++) {
+          const k = ((cx + dx) * 73856093) ^ ((cy + dy) * 19349663) ^ ((cz + dz) * 83492791);
+          const bucket = this.map.get(k);
+          if (bucket) {
+            for (let j = 0; j < bucket.length; j++) out.push(bucket[j]);
+          }
+        }
+      }
+    }
+  }
+}
+
+const spatialHash = new SpatialHash(CONFIG.cellSize);
+const neighbors = [];
+
+// ─── SCARE POINTS ──────────────────────────────────────────────
+const scarePoints = [];
+
+// ─── UPDATE BOIDS ──────────────────────────────────────────────
+const _sep = new THREE.Vector3();
+const _ali = new THREE.Vector3();
+const _coh = new THREE.Vector3();
+const _steer = new THREE.Vector3();
+const _diff = new THREE.Vector3();
+
+function updateBoids(dt) {
+  const count = CONFIG.boidCount;
+  const maxSpd = CONFIG.maxSpeed * CONFIG.speed;
+  const maxF = CONFIG.maxForce;
+  const pRad = CONFIG.perceptionRadius;
+  const sRad = CONFIG.separationRadius;
+  const bRad = CONFIG.boundRadius;
+
+  // Rebuild spatial hash
+  spatialHash.clear();
+  for (let i = 0; i < count; i++) {
+    spatialHash.insert(i, boids.px[i], boids.py[i], boids.pz[i]);
+  }
+
+  for (let i = 0; i < count; i++) {
+    const px = boids.px[i], py = boids.py[i], pz = boids.pz[i];
+    let svx = 0, svy = 0, svz = 0; // separation
+    let avx = 0, avy = 0, avz = 0; // alignment
+    let cvx = 0, cvy = 0, cvz = 0; // cohesion center
+    let sepCount = 0, aliCount = 0;
+
+    spatialHash.query(px, py, pz, pRad, neighbors);
+
+    for (let n = 0; n < neighbors.length; n++) {
+      const j = neighbors[n];
+      if (j === i) continue;
+      const dx = px - boids.px[j];
+      const dy = py - boids.py[j];
+      const dz = pz - boids.pz[j];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > pRad * pRad || d2 === 0) continue;
+
+      const d = Math.sqrt(d2);
+
+      // Separation
+      if (d < sRad) {
+        const w = 1.0 / d;
+        svx += dx * w; svy += dy * w; svz += dz * w;
+        sepCount++;
+      }
+      // Alignment
+      avx += boids.vx[j]; avy += boids.vy[j]; avz += boids.vz[j];
+      // Cohesion
+      cvx += boids.px[j]; cvy += boids.py[j]; cvz += boids.pz[j];
+      aliCount++;
+    }
+
+    let fx = 0, fy = 0, fz = 0;
+
+    // Separation force
+    if (sepCount > 0) {
+      svx /= sepCount; svy /= sepCount; svz /= sepCount;
+      const sm = Math.sqrt(svx * svx + svy * svy + svz * svz) || 1;
+      fx += (svx / sm * maxSpd - boids.vx[i]) * CONFIG.separation * 1.5;
+      fy += (svy / sm * maxSpd - boids.vy[i]) * CONFIG.separation * 1.5;
+      fz += (svz / sm * maxSpd - boids.vz[i]) * CONFIG.separation * 1.5;
+    }
+
+    if (aliCount > 0) {
+      // Alignment force
+      avx /= aliCount; avy /= aliCount; avz /= aliCount;
+      const am = Math.sqrt(avx * avx + avy * avy + avz * avz) || 1;
+      fx += (avx / am * maxSpd - boids.vx[i]) * CONFIG.alignment;
+      fy += (avy / am * maxSpd - boids.vy[i]) * CONFIG.alignment;
+      fz += (avz / am * maxSpd - boids.vz[i]) * CONFIG.alignment;
+
+      // Cohesion force
+      cvx /= aliCount; cvy /= aliCount; cvz /= aliCount;
+      let cdx = cvx - px, cdy = cvy - py, cdz = cvz - pz;
+      const cm = Math.sqrt(cdx * cdx + cdy * cdy + cdz * cdz) || 1;
+      fx += (cdx / cm * maxSpd - boids.vx[i]) * CONFIG.cohesion;
+      fy += (cdy / cm * maxSpd - boids.vy[i]) * CONFIG.cohesion;
+      fz += (cdz / cm * maxSpd - boids.vz[i]) * CONFIG.cohesion;
+    }
+
+    // Bound constraint (soft sphere)
+    const dist = Math.sqrt(px * px + py * py + pz * pz);
+    if (dist > bRad * 0.7) {
+      const strength = ((dist - bRad * 0.7) / (bRad * 0.3)) * CONFIG.boundForce;
+      fx -= (px / dist) * strength;
+      fy -= (py / dist) * strength;
+      fz -= (pz / dist) * strength;
+    }
+
+    // Predator avoidance
+    if (CONFIG.predatorOn) {
+      const dpx = px - predatorState.pos.x;
+      const dpy = py - predatorState.pos.y;
+      const dpz = pz - predatorState.pos.z;
+      const dpd = Math.sqrt(dpx * dpx + dpy * dpy + dpz * dpz);
+      if (dpd < CONFIG.predatorRadius && dpd > 0) {
+        const pForce = CONFIG.predatorForce * (1 - dpd / CONFIG.predatorRadius);
+        fx += (dpx / dpd) * pForce;
+        fy += (dpy / dpd) * pForce;
+        fz += (dpz / dpd) * pForce;
+      }
+    }
+
+    // Scare point avoidance
+    for (let s = 0; s < scarePoints.length; s++) {
+      const sp = scarePoints[s];
+      const sdx = px - sp.x, sdy = py - sp.y, sdz = pz - sp.z;
+      const sd = Math.sqrt(sdx * sdx + sdy * sdy + sdz * sdz);
+      if (sd < CONFIG.scareRadius && sd > 0) {
+        const sf = CONFIG.scareForce * (1 - sd / CONFIG.scareRadius) * sp.strength;
+        fx += (sdx / sd) * sf;
+        fy += (sdy / sd) * sf;
+        fz += (sdz / sd) * sf;
+      }
+    }
+
+    // Clamp force
+    const fm = Math.sqrt(fx * fx + fy * fy + fz * fz);
+    if (fm > maxF) {
+      const s = maxF / fm;
+      fx *= s; fy *= s; fz *= s;
+    }
+
+    // Integrate
+    boids.vx[i] += fx * dt;
+    boids.vy[i] += fy * dt;
+    boids.vz[i] += fz * dt;
+
+    // Clamp speed
+    const vm = Math.sqrt(boids.vx[i] ** 2 + boids.vy[i] ** 2 + boids.vz[i] ** 2);
+    if (vm > maxSpd) {
+      const s = maxSpd / vm;
+      boids.vx[i] *= s; boids.vy[i] *= s; boids.vz[i] *= s;
+    } else if (vm < maxSpd * 0.3) {
+      const s = (maxSpd * 0.3) / (vm || 1);
+      boids.vx[i] *= s; boids.vy[i] *= s; boids.vz[i] *= s;
+    }
+
+    boids.px[i] += boids.vx[i] * dt;
+    boids.py[i] += boids.vy[i] * dt;
+    boids.pz[i] += boids.vz[i] * dt;
+  }
+}
+
+// ─── UPDATE PREDATOR ───────────────────────────────────────────
+function updatePredator(dt) {
+  if (!CONFIG.predatorOn) { predatorMesh.visible = false; return; }
+  predatorMesh.visible = true;
+
+  if (!isDraggingPredator) {
+    // Predator chases flock center
+    const count = CONFIG.boidCount;
+    let cx = 0, cy = 0, cz = 0;
+    for (let i = 0; i < count; i++) {
+      cx += boids.px[i]; cy += boids.py[i]; cz += boids.pz[i];
+    }
+    cx /= count; cy /= count; cz /= count;
+
+    // Add some wander
+    predatorState.wanderAngle += (Math.random() - 0.5) * 2 * dt;
+    const wander = 15;
+    const tx = cx + Math.cos(predatorState.wanderAngle) * wander;
+    const ty = cy + Math.sin(predatorState.wanderAngle * 0.7) * wander * 0.5;
+    const tz = cz + Math.sin(predatorState.wanderAngle * 1.3) * wander;
+
+    const dx = tx - predatorState.pos.x;
+    const dy = ty - predatorState.pos.y;
+    const dz = tz - predatorState.pos.z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+
+    const predSpeed = CONFIG.maxSpeed * CONFIG.speed * 0.6;
+    predatorState.vel.x += (dx / d * predSpeed - predatorState.vel.x) * 2 * dt;
+    predatorState.vel.y += (dy / d * predSpeed - predatorState.vel.y) * 2 * dt;
+    predatorState.vel.z += (dz / d * predSpeed - predatorState.vel.z) * 2 * dt;
+
+    predatorState.pos.add(predatorState.vel.clone().multiplyScalar(dt));
+  }
+
+  predatorMesh.position.copy(predatorState.pos);
+}
+
+// ─── UPDATE INSTANCE MATRIX ────────────────────────────────────
+const _dummy = new THREE.Object3D();
+const _lookDir = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+
+function updateMeshes() {
+  const count = CONFIG.boidCount;
+  const isNeon = CONFIG.theme === 'neon';
+
+  for (let i = 0; i < count; i++) {
+    _dummy.position.set(boids.px[i], boids.py[i], boids.pz[i]);
+    _lookDir.set(boids.vx[i], boids.vy[i], boids.vz[i]);
+    if (_lookDir.lengthSq() > 0.001) {
+      _dummy.lookAt(
+        boids.px[i] + boids.vx[i],
+        boids.py[i] + boids.vy[i],
+        boids.pz[i] + boids.vz[i]
+      );
+    }
+    _dummy.updateMatrix();
+    boidMesh.setMatrixAt(i, _dummy.matrix);
+
+    // Per-instance color for neon
+    if (isNeon) {
+      const hue = (i / count + performance.now() * 0.00005) % 1;
+      _tmpColor.setHSL(hue, 1, 0.5);
+      boidColors[i * 3] = _tmpColor.r;
+      boidColors[i * 3 + 1] = _tmpColor.g;
+      boidColors[i * 3 + 2] = _tmpColor.b;
+    }
+  }
+
+  boidMesh.count = count;
+  boidMesh.instanceMatrix.needsUpdate = true;
+  if (isNeon) boidMesh.instanceColor.needsUpdate = true;
+}
+
+const _tmpColor = new THREE.Color();
+
+// ─── UPDATE TRAILS ─────────────────────────────────────────────
+function updateTrails() {
+  const tLen = CONFIG.trailLen;
+  if (tLen === 0) {
+    trailPoints.visible = false;
+    return;
+  }
+  trailPoints.visible = true;
+
+  const count = CONFIG.boidCount;
+  const posArr = trailGeo.attributes.position.array;
+  const colArr = trailGeo.attributes.color.array;
+  let idx = 0;
+  const theme = THEMES[CONFIG.theme];
+
+  for (let i = 0; i < count; i++) {
+    // Push current position
+    const hist = trailHistory[i];
+    hist.push(boids.px[i], boids.py[i], boids.pz[i]);
+    while (hist.length > tLen * 3) { hist.shift(); hist.shift(); hist.shift(); }
+
+    const points = hist.length / 3;
+    for (let t = 0; t < points; t++) {
+      const a = t / points;
+      posArr[idx * 3] = hist[t * 3];
+      posArr[idx * 3 + 1] = hist[t * 3 + 1];
+      posArr[idx * 3 + 2] = hist[t * 3 + 2];
+      colArr[idx * 4] = theme.boidColor.r;
+      colArr[idx * 4 + 1] = theme.boidColor.g;
+      colArr[idx * 4 + 2] = theme.boidColor.b;
+      colArr[idx * 4 + 3] = a * 0.4;
+      idx++;
+    }
+  }
+
+  trailGeo.setDrawRange(0, idx);
+  trailGeo.attributes.position.needsUpdate = true;
+  trailGeo.attributes.color.needsUpdate = true;
+}
+
+// ─── THEME APPLICATION ─────────────────────────────────────────
+function applyTheme(name) {
+  CONFIG.theme = name;
+  const t = THEMES[name];
+  scene.background = t.bg;
+  scene.fog.color.copy(t.fog);
+  boidMat.color.copy(t.boidColor);
+  boidMat.emissive.copy(t.boidEmissive);
+  ambientLight.color.set(t.ambientColor);
+  dirLight.color.set(t.dirColor);
+  particleMat.color.set(t.particleColor);
+  particleMat.opacity = t.particleOpacity;
+
+  // Update sky
+  skyMat.uniforms.colorTop.value.set(t.skyColors[0]);
+  skyMat.uniforms.colorMid1.value.set(t.skyColors[1]);
+  skyMat.uniforms.colorMid2.value.set(t.skyColors[2]);
+  skyMat.uniforms.colorBot.value.set(t.skyColors[3]);
+
+  // Neon uses vertex colors
+  if (name === 'neon') {
+    boidMat.color.set(0xffffff);
+    boidMat.vertexColors = true;
+  } else {
+    boidMat.vertexColors = false;
+  }
+  boidMat.needsUpdate = true;
+
+  // Update theme buttons
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.toggle('active', b.dataset.theme === name));
+}
+
+// ─── UI WIRING ─────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+$('collapse-btn').onclick = () => $('ui-panel').classList.toggle('collapsed');
+
+function wireSlider(id, valId, prop, fmt = v => v) {
+  const el = $(id);
+  el.oninput = () => {
+    CONFIG[prop] = parseFloat(el.value);
+    $(valId).textContent = fmt(el.value);
+  };
+}
+wireSlider('separation', 'sep-val', 'separation');
+wireSlider('alignment', 'ali-val', 'alignment');
+wireSlider('cohesion', 'coh-val', 'cohesion');
+wireSlider('speed', 'spd-val', 'speed');
+wireSlider('trailLen', 'trail-val', 'trailLen', v => parseInt(v));
+
+$('boidCount').oninput = function() {
+  const newCount = parseInt(this.value);
+  $('cnt-val').textContent = newCount;
+  if (newCount > CONFIG.boidCount) {
+    // Init new boids
+    for (let i = CONFIG.boidCount; i < newCount; i++) {
+      const r = CONFIG.boundRadius * 0.5;
+      boids.px[i] = (Math.random() - 0.5) * r;
+      boids.py[i] = (Math.random() - 0.5) * r;
+      boids.pz[i] = (Math.random() - 0.5) * r;
+      boids.vx[i] = (Math.random() - 0.5) * 10;
+      boids.vy[i] = (Math.random() - 0.5) * 10;
+      boids.vz[i] = (Math.random() - 0.5) * 10;
+      trailHistory[i] = [];
+    }
+  }
+  CONFIG.boidCount = newCount;
+};
+
+document.querySelectorAll('.theme-btn').forEach(btn => {
+  btn.onclick = () => applyTheme(btn.dataset.theme);
+});
+
+$('predator-toggle').onclick = function() {
+  CONFIG.predatorOn = !CONFIG.predatorOn;
+  this.classList.toggle('on', CONFIG.predatorOn);
+};
+
+$('pause-btn').onclick = function() {
+  CONFIG.paused = !CONFIG.paused;
+  this.textContent = CONFIG.paused ? '▶ Play' : '⏸ Pause';
+};
+
+$('reset-btn').onclick = () => {
+  initBoids(CONFIG.boidCount);
+  predatorState.pos.set(40, 20, 0);
+  predatorState.vel.set(-8, 0, 5);
+};
+
+// ─── CLICK TO SCARE ────────────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const _plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const _intersect = new THREE.Vector3();
+
+let isDraggingPredator = false;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+
+  // Check if clicking predator
+  if (CONFIG.predatorOn) {
+    const hits = raycaster.intersectObject(predatorMesh);
+    if (hits.length > 0) {
+      isDraggingPredator = true;
+      controls.enabled = false;
+      return;
+    }
+  }
+
+  // Otherwise place scare point
+  _plane.normal.copy(camera.getWorldDirection(new THREE.Vector3()));
+  _plane.constant = -_plane.normal.dot(new THREE.Vector3(0, 0, 0));
+  if (raycaster.ray.intersectPlane(_plane, _intersect)) {
+    scarePoints.push({ x: _intersect.x, y: _intersect.y, z: _intersect.z, strength: 1.0, time: CONFIG.scareDuration });
+  }
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!isDraggingPredator) return;
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  _plane.normal.copy(camera.getWorldDirection(new THREE.Vector3()));
+  _plane.constant = -_plane.normal.dot(predatorState.pos);
+  if (raycaster.ray.intersectPlane(_plane, _intersect)) {
+    predatorState.pos.copy(_intersect);
+  }
+});
+
+renderer.domElement.addEventListener('pointerup', () => {
+  if (isDraggingPredator) {
+    isDraggingPredator = false;
+    controls.enabled = true;
+  }
+});
+
+// ─── RESIZE ────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ─── FPS COUNTER ───────────────────────────────────────────────
+let frameCount = 0, fpsTime = 0;
+function updateFPS(now) {
+  frameCount++;
+  if (now - fpsTime > 1000) {
+    $('fps').textContent = `FPS: ${frameCount} | Boids: ${CONFIG.boidCount}`;
+    frameCount = 0;
+    fpsTime = now;
+  }
+}
+
+// ─── MAIN LOOP ─────────────────────────────────────────────────
+let lastTime = performance.now();
+
+applyTheme('dusk');
+
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const rawDt = (now - lastTime) / 1000;
+  lastTime = now;
+  const dt = Math.min(rawDt, 0.05); // cap delta time
+
+  updateFPS(now);
+
+  if (!CONFIG.paused) {
+    // Decay scare points
+    for (let i = scarePoints.length - 1; i >= 0; i--) {
+      scarePoints[i].time -= dt;
+      scarePoints[i].strength = Math.max(0, scarePoints[i].time / CONFIG.scareDuration);
+      if (scarePoints[i].time <= 0) scarePoints.splice(i, 1);
+    }
+
+    updateBoids(dt);
+    updatePredator(dt);
+    updateTrails();
+  }
+
+  updateMeshes();
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>
